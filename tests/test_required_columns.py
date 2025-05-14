@@ -11,6 +11,7 @@ def test_required_columns_present():
         pytest.skip("no snapshot file available")
     file = files[-1]     # latest snapshot
     cols = set(r[0] for r in duckdb.query(
-        f"SELECT name FROM parquet_schema('{file}')"
+        f"SELECT name FROM parquet_schema('{file}') "
+        "WHERE name <> 'schema'"          # filter out synthetic schema row
     ).fetchall())
     assert cols == EXPECTED, f"columns mismatch: {cols.symmetric_difference(EXPECTED)}"
