@@ -9,4 +9,4 @@ __pycache__/
 .venv/
 
 # raw data snapshots
-data/
+data/market.duckdb
