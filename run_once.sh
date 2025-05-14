@@ -10,8 +10,14 @@ pytest -q tests/test_bid_ask_not_null.py
 # 3. make the new snapshot visible via the view
 duckdb market.duckdb -c "
 CREATE OR REPLACE VIEW spx_chain AS
-SELECT *, substr(file_name, -15, 8) AS ts
-FROM parquet_scan('data/parquet/spx/date=*/*.parquet');"
+SELECT *,
+       -- take 8 chars starting 16 from the end: 20_42_52
+       substr(filename, -16, 8) AS ts
+FROM parquet_scan(
+       'data/parquet/spx/date=*/*.parquet',
+       filename=true             -- expose filename column
+);
+"
 
 # 4. simple timestamped log
 mkdir -p data/logs
