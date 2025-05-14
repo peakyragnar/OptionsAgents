@@ -1,1 +1,12 @@
 .env
+
+# macOS & Python detritus
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# virtual environment
+.venv/
+
+# raw data snapshots
+data/
