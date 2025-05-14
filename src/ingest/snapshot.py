@@ -8,6 +8,7 @@ data/parquet/spx/date=YYYY-MM-DD/HH_MM_SS.parquet
 import os, pathlib, datetime, dotenv
 import pandas as pd
 from polygon import RESTClient
+from polygon.rest.models import Quote  # add under other imports
 
 # 1. API key
 dotenv.load_dotenv()
@@ -30,6 +31,14 @@ def fetch_chain():
         "SPX",
         params={"expiration_date": today}
     )
+    
+    # --- NEW accurate underlying price ---------------------------------
+    # Polygon's index quote endpoint
+    idx_quote = client.get_last_quote("SPX")         # Quote object
+    under_px  = idx_quote.ask_price or idx_quote.bid_price
+    if under_px is None:
+        raise RuntimeError("SPX quote returned null prices")
+    # --------------------------------------------------------------------
     rows = []
 
     # Process options from the chain
@@ -47,7 +56,7 @@ def fetch_chain():
             "iv":     getattr(opt.greeks, "implied_volatility", None) if hasattr(opt, "greeks") else None,
             "delta":  getattr(opt.greeks, "delta", None) if hasattr(opt, "greeks") else None,
             "gamma":  getattr(opt.greeks, "gamma", None) if hasattr(opt, "greeks") else None,
-            "under_px": getattr(opt.underlying, "price", None) if hasattr(opt, "underlying") else None
+            "under_px": under_px
         })
 
     return pd.DataFrame(rows)
