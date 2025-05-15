@@ -11,6 +11,9 @@ from polygon import RESTClient
 dotenv.load_dotenv()
 client = RESTClient(os.getenv("POLYGON_KEY"))
 
+def _nan_if_none(x):
+    return float("nan") if x is None else float(x)
+
 def fetch_chain() -> pd.DataFrame:
     today = datetime.date.today().isoformat()
 
@@ -84,13 +87,15 @@ def fetch_chain() -> pd.DataFrame:
                 "type":   side,
                 "strike": opt.details.strike_price,
                 "expiry": opt.details.expiration_date,
-                "bid":    getattr(opt.last_quote, "bid", None),       # Correct field name
-                "ask":    getattr(opt.last_quote, "ask", None),       # Correct field name
+                "bid":  opt.last_quote.bid,
+                "ask":  opt.last_quote.ask,
                 "volume": getattr(opt.day, "volume", 0),
                 "open_interest": getattr(opt.details, "open_interest", 0),
-                "iv":     getattr(opt.greeks, "iv", None),
-                "delta":  getattr(opt.greeks, "delta", None),
-                "gamma":  getattr(opt.greeks, "gamma", None),
+                "iv":    _nan_if_none(getattr(opt.greeks, "iv",    None)),
+                "delta": _nan_if_none(getattr(opt.greeks, "delta", None)),
+                "gamma": _nan_if_none(getattr(opt.greeks, "gamma", None)),
+                "vega":  _nan_if_none(getattr(opt.greeks, "vega",  None)),
+                "theta": _nan_if_none(getattr(opt.greeks, "theta", None)),
                 "under_px": under_px
             })
 
