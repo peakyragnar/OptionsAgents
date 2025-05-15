@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e                      # exit immediately on error
+source /Users/michael/OptionsAgents/.venv/bin/activate
 
 # 1. write a snapshot
 python src/ingest/snapshot.py
