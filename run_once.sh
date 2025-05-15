@@ -2,6 +2,16 @@
 set -e                      # exit immediately on error
 source /Users/michael/OptionsAgents/.venv/bin/activate
 
+# ── Skip when US-equity market is closed ──────────────────────────────
+if ! duckdb -c "
+  SELECT  EXTRACT('dow', NOW()) BETWEEN 1 AND 5    -- Mon-Fri
+     AND EXTRACT('hour', NOW()) BETWEEN 13 AND 20  -- 13-20 UTC (09-16 ET)
+"; then
+  echo \"$(date '+%T')  SKIP – market closed\" >> data/logs/ingest_$(date +%F).log
+  exit 0
+fi
+# ──────────────────────────────────────────────────────────────────────
+
 # 1. write a snapshot
 python src/ingest/snapshot.py
 
