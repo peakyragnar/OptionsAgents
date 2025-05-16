@@ -17,5 +17,9 @@ market.duckdb
 *.parquet
 *.log
 
-# scratch
+# scratch / one-offs
+dealer_gamma_profile.png
+debug_gamma.py
+run_direct_gamma.py
 lists/
+
