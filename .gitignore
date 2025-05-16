@@ -1,17 +1,10 @@
-.env
-
-# macOS & Python detritus
-.DS_Store
-__pycache__/
-*.py[cod]
-
-# virtual environment
-.venv/
-
-# raw data snapshots
-data/market.duckdb
-
-# raw data and live DB
+# data artefacts
 data/
 market.duckdb
-
+*.parquet
+*.log
+# one-off scripts / images
+*.png
+run_direct_gamma.py
+debug_gamma.py
+lists/
