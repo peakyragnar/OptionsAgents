@@ -3,77 +3,90 @@ Option Greeks calculation utilities using Black-Scholes model.
 Includes functions for calculating implied volatility and option Greeks.
 """
 import math
-from scipy import stats, optimize
+from scipy.stats import norm
+from scipy.optimize import brentq
 
-
-def implied_vol(option_type, S, K, T, r, price, precision=0.00001, max_iterations=100):
+def bs_price(s, k, iv, tau, cp):
     """
-    Calculate implied volatility using Brent's method.
+    Calculate option price using Black-Scholes formula.
     
     Parameters:
-    option_type: 'call' or 'put'
-    S: spot price (current underlying price)
-    K: strike price
-    T: time to maturity in years (e.g., 5/365 for 5 days)
-    r: risk-free rate (e.g., 0.05 for 5%)
+    s: spot price (current underlying price)
+    k: strike price
+    iv: implied volatility
+    tau: time to maturity in years (e.g., 5/365 for 5 days)
+    cp: option type ('C' for call, 'P' for put)
+    
+    Returns:
+    Option price
+    """
+    d1 = (math.log(s / k) + 0.5 * iv**2 * tau) / (iv * math.sqrt(tau))
+    d2 = d1 - iv * math.sqrt(tau)
+    if cp == "C":
+        return s * norm.cdf(d1) - k * norm.cdf(d2)
+    else:  # Put via put-call parity
+        return k * norm.cdf(-d2) - s * norm.cdf(-d1)
+
+def implied_vol(price, s, k, tau, cp):
+    """
+    Calculate implied volatility using Brent's method.
+    Return sigma or None if root-find fails.
+    
+    Parameters:
     price: market price of the option
-    precision: precision for the implied volatility calculation
-    max_iterations: maximum number of iterations for Brent's method
+    s: spot price (current underlying price)
+    k: strike price
+    tau: time to maturity in years (e.g., 5/365 for 5 days)
+    cp: option type ('C' for call, 'P' for put)
     
     Returns:
     Implied volatility as a float or None if calculation fails
     """
     # Ensure minimum time to maturity to avoid numerical issues
-    T = max(T, 1/365)
+    tau = max(tau, 1/365)
     
-    # Set bounds for implied volatility
-    iv_min = 0.001
-    iv_max = 5.0  # 500% volatility is a reasonable upper bound
-    
-    # Define objective function (difference between theoretical and market price)
-    def objective(sigma):
-        try:
-            price_theoretical = bs_price(option_type, S, K, T, r, sigma)
-            return price_theoretical - price
-        except (ValueError, OverflowError):
-            # Return a large number if calculation fails
-            return 1000.0
-            
     try:
-        # Use Brent's method to find the implied volatility
-        iv = optimize.brentq(
-            objective, iv_min, iv_max,
-            rtol=precision,
-            maxiter=max_iterations
-        )
-        return iv
-    except (ValueError, RuntimeError):
-        # If Brent's method fails, return None
+        f = lambda sigma: bs_price(s, k, sigma, tau, cp) - price
+        return brentq(f, 1e-4, 3.0, maxiter=100, rtol=1e-6)
+    except Exception:
         return None
 
-
-def bs_price(option_type, S, K, T, r, sigma):
-    """
-    Calculate option price using Black-Scholes formula.
-    """
-    # Ensure minimum time to maturity to avoid numerical issues
-    T = max(T, 1/365)
-    
-    # Calculate d1 and d2
-    d1 = (math.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    
-    # Calculate option price
-    if option_type.lower() == 'call':
-        return S * stats.norm.cdf(d1) - K * math.exp(-r * T) * stats.norm.cdf(d2)
-    else:  # put
-        return K * math.exp(-r * T) * stats.norm.cdf(-d2) - S * stats.norm.cdf(-d1)
-
-
-def bs_greeks(option_type, S, K, T, r, sigma):
+def bs_greeks(s, k, iv, tau, cp):
     """
     Calculate option Greeks using Black-Scholes model.
-    Returns NaN for Greeks if sigma is None or not numeric.
+    
+    Parameters:
+    s: spot price (current underlying price)
+    k: strike price
+    iv: implied volatility
+    tau: time to maturity in years (e.g., 5/365 for 5 days)
+    cp: option type ('C' for call, 'P' for put)
+    
+    Returns:
+    gamma, vega, theta as a tuple
+    """
+    # Ensure minimum time to maturity and valid IV
+    tau = max(tau, 1/365)
+    if iv is None or math.isnan(iv) or iv <= 0:
+        return float('nan'), float('nan'), float('nan')
+    
+    d1 = (math.log(s / k) + 0.5 * iv**2 * tau) / (iv * math.sqrt(tau))
+    d2 = d1 - iv * math.sqrt(tau)
+    phi = norm.pdf(d1)
+    
+    # Greek calculations
+    gamma = phi / (s * iv * math.sqrt(tau))
+    vega = s * phi * math.sqrt(tau) / 100  # per 1 vol-pt
+    theta = (- (s * phi * iv) / (2 * math.sqrt(tau))) / 365  # daily theta
+    
+    return gamma, vega, theta
+
+# Backward compatibility for older code
+def bs_greeks_dict(option_type, S, K, T, r, sigma):
+    """
+    Legacy wrapper for backward compatibility.
+    Calculate option Greeks using Black-Scholes model.
+    Returns dictionary of Greeks.
     
     Parameters:
     option_type: 'call' or 'put'
@@ -98,26 +111,15 @@ def bs_greeks(option_type, S, K, T, r, sigma):
     # Ensure minimum time to maturity to avoid numerical issues
     T = max(T, 1/365)
     
-    # Calculate d1 and d2
+    # Convert option_type to cp format
+    cp = "C" if option_type.lower() == 'call' else "P"
+    
+    # Calculate Greeks using new function
+    gamma, vega, theta = bs_greeks(S, K, sigma, T, cp)
+    
+    # Calculate delta separately since it's not in the new function
     d1 = (math.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
-    
-    # Standard normal CDF and PDF
-    N_d1 = stats.norm.cdf(d1)
-    N_d2 = stats.norm.cdf(d2)
-    n_d1 = stats.norm.pdf(d1)
-    
-    # Greeks calculations
-    if option_type.lower() == 'call':
-        delta = N_d1
-        theta = -(S * sigma * n_d1) / (2 * math.sqrt(T)) - r * K * math.exp(-r * T) * N_d2
-    else:  # put
-        delta = N_d1 - 1
-        theta = -(S * sigma * n_d1) / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * (1 - N_d2)
-    
-    # Same for both call and put
-    gamma = n_d1 / (S * sigma * math.sqrt(T))
-    vega = S * math.sqrt(T) * n_d1 * 0.01  # scaled by 0.01 to get the impact of 1% change in vol
+    delta = norm.cdf(d1) if cp == "C" else norm.cdf(d1) - 1
     
     return {
         'delta': delta,
@@ -126,7 +128,7 @@ def bs_greeks(option_type, S, K, T, r, sigma):
         'vega': vega
     }
 
-
+# For backward compatibility
 def estimate_vol_from_moneyness(moneyness, base_vol=0.20):
     """
     Estimate implied volatility based on option moneyness when market data isn't available.
