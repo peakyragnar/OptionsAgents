@@ -1,10 +1,21 @@
-# data artefacts
+# macOS
+.DS_Store
+
+# secrets & env
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# virtual environment
+.venv/
+
+# data & logs
 data/
 market.duckdb
 *.parquet
 *.log
-# one-off scripts / images
-*.png
-run_direct_gamma.py
-debug_gamma.py
+
+# scratch
 lists/
