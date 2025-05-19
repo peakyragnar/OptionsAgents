@@ -11,3 +11,4 @@ fastparquet>=2023.8.0
 matplotlib>=3.7.0
 plotly>=5.15.0
 zstandard>=0.21.0
+aiohttp>=3.9.0
