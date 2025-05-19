@@ -1,57 +1,94 @@
-# src/stream/quote_cache.py
-import os, asyncio, datetime, aiohttp
-from collections import defaultdict
-from dotenv import load_dotenv
-from src.data.contract_loader import todays_spx_0dte_contracts
+"""
+quote_cache.py
+--------------
+Populate a module-level `quotes` dict with NBBOs for every same-day (0-DTE)
+SPX / SPXW contract.  Designed so that tests/test_quote_cache.py sees a
+non-empty dict inside two seconds.
+
+Prerequisites
+* POLYGON_KEY exported in the shell.
+* A Parquet snapshot  data/snapshots/spx_contracts_YYYYMMDD.parquet
+  written by your existing snapshot job.
+"""
+
+from __future__ import annotations
+import asyncio, datetime, os
 from pathlib import Path
-from src.stream import polygon_client
 
-load_dotenv()
-API_KEY = os.getenv("POLYGON_KEY")
-BASE    = "https://api.polygon.io"
+import aiohttp
 
-quotes = {}   # Global dict that will store the latest quotes
+from data.contract_loader import todays_spx_0dte_contracts
+from . import polygon_client
 
-try:
-    _UNIVERSE = todays_spx_0dte_contracts(Path("data/snapshots"))
-except Exception as e:
-    print(f"Warning: Could not load contracts from snapshot: {e}")
-    _UNIVERSE = []  # Empty list as fallback
 
-async def _today_spxw_symbols(session) -> list[str]:
-    """Return all SPXW contracts expiring today."""
-    today = datetime.date.today().isoformat()
-    url   = f"{BASE}/v3/reference/options/contracts"
-    params = {"underlying_ticker": "SPX", "expiration_date": today,
-              "limit": 1000, "apiKey": API_KEY}
-    async with session.get(url, params=params, timeout=10) as r:
-        r.raise_for_status()
-        data = await r.json()
-    return [item["ticker"] for item in data.get("results", [])]
+# --------------------------------------------------------------------- #
+# 1.  build universe once                                               #
+# --------------------------------------------------------------------- #
 
-async def run(poll_ms: int = 250):
+_SNAPSHOT_DIR = Path("data/snapshots")
+_UNIVERSE: list[str] = todays_spx_0dte_contracts(_SNAPSHOT_DIR)
+
+if not _UNIVERSE:
+    raise RuntimeError(
+        f"No 0-DTE contracts found in {_SNAPSHOT_DIR}. "
+        "Run the snapshot job or drop a mock parquet for tests."
+    )
+
+print(f"quote_cache: tracking {len(_UNIVERSE)} contracts")
+
+
+# --------------------------------------------------------------------- #
+# 2.  public cache – tests read this                                    #
+# --------------------------------------------------------------------- #
+
+# key   = OCC ticker e.g. 'O:SPXW250519P05000000'
+# value = (bid_price, ask_price, sip_timestamp)
+quotes: dict[str, tuple[float, float, int]] = {}
+
+
+# --------------------------------------------------------------------- #
+# 3.  helpers                                                           #
+# --------------------------------------------------------------------- #
+
+async def _fetch_and_store(
+    sem: asyncio.Semaphore,
+    sess: aiohttp.ClientSession,
+    sym: str,
+) -> None:
+    """Rate-limited fetch; save NBBO straight into `quotes`."""
+    async with sem:
+        try:
+            q = await polygon_client.fetch_quote(sess, sym)
+        except Exception:
+            return                    # network error / 5xx / timeout
+        if q:
+            quotes[sym] = (
+                q["bid_price"],
+                q["ask_price"],
+                q["sip_timestamp"],
+            )
+
+
+# --------------------------------------------------------------------- #
+# 4.  poller                                                            #
+# --------------------------------------------------------------------- #
+
+async def run(poll_ms: int = 250, max_concurrency: int = 50) -> None:
     """
-    Concurrent poller: ≤50 in-flight /v3/quotes requests.
-    Fills the module-level `quotes` dict that tests assert on.
+    Refresh all NBBOs forever.
+
+    * poll_ms         – delay between full passes (default 250 ms).
+    * max_concurrency – keep ≤ this many HTTP requests in flight
+                        (Polygon Advanced tier allows 50 rps).
     """
-    symbols = _UNIVERSE
-    if not symbols:
-        raise RuntimeError("no 0-DTE symbols in snapshot")
-
-    print(f"Starting quote cache for {len(symbols)} contracts")
-
-    sem = asyncio.Semaphore(50)              # 50 rps → 3 000 rpm
+    sem = asyncio.Semaphore(max_concurrency)
 
     async with aiohttp.ClientSession() as sess:
-        async def bound_fetch(sym: str):
-            async with sem:
-                q = await polygon_client.fetch_quote(sess, sym)
-                if q:
-                    quotes[sym] = (q["last_quote"]["bid_price"],
-                                   q["last_quote"]["ask_price"],
-                                   q["last_quote"]["sip_timestamp"])
-
         while True:
-            # launch one coroutine per symbol, limited by the semaphore
-            await asyncio.gather(*(bound_fetch(s) for s in symbols))
+            tasks = [_fetch_and_store(sem, sess, s) for s in _UNIVERSE]
+
+            # handle each quote as soon as its request completes
+            for fut in asyncio.as_completed(tasks):
+                await fut
+
             await asyncio.sleep(poll_ms / 1000)
