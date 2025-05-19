@@ -30,24 +30,28 @@ async def _today_spxw_symbols(session) -> list[str]:
     return [item["ticker"] for item in data.get("results", [])]
 
 async def run(poll_ms: int = 250):
-    """Continuously refresh bids/asks for today's weeklies."""
-    # Use pre-loaded universe if available, otherwise fetch from API
-    if not _UNIVERSE:
-        async with aiohttp.ClientSession() as session:
-            symbols = await _today_spxw_symbols(session)
-            if not symbols:
-                raise RuntimeError("No SPX tickers available for today")
-    else:
-        symbols = _UNIVERSE
-    
+    """
+    Concurrent poller: ≤50 in-flight /v3/quotes requests.
+    Fills the module-level `quotes` dict that tests assert on.
+    """
+    symbols = _UNIVERSE
+    if not symbols:
+        raise RuntimeError("no 0-DTE symbols in snapshot")
+
     print(f"Starting quote cache for {len(symbols)} contracts")
-    
+
+    sem = asyncio.Semaphore(50)              # 50 rps → 3 000 rpm
+
     async with aiohttp.ClientSession() as sess:
+        async def bound_fetch(sym: str):
+            async with sem:
+                q = await polygon_client.fetch_quote(sess, sym)
+                if q:
+                    quotes[sym] = (q["last_quote"]["bid_price"],
+                                   q["last_quote"]["ask_price"],
+                                   q["last_quote"]["sip_timestamp"])
+
         while True:
-            for tkr in symbols:
-                q = await polygon_client.fetch_quote(sess, tkr)
-                if q and "last_quote" in q:
-                    quotes[tkr] = (q["last_quote"]["bid"], q["last_quote"]["ask"], q["last_quote"]["sip_timestamp"])
-            
-            print(f"Updated {len(quotes)} quotes")
-            await asyncio.sleep(0.25)  # ~4 Hz per contract – tune as needed
+            # launch one coroutine per symbol, limited by the semaphore
+            await asyncio.gather(*(bound_fetch(s) for s in symbols))
+            await asyncio.sleep(poll_ms / 1000)
