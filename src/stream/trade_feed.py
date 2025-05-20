@@ -50,11 +50,12 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                     for i in range(0, len(symbols), CHUNK):
                         batch = symbols[i : i + CHUNK]
                         
-                        # Format according to Polygon docs: "OT.{symbol}"
-                        symbols_string = f"OT.{',OT.'.join(batch)}"
-                        sub_msg = {"action": "subscribe", "params": symbols_string}
+                        # Format according to Polygon docs: params must be an ARRAY of strings
+                        # Each string should be in the format "OT.{symbol}"
+                        formatted_symbols = [f"OT.{symbol}" for symbol in batch]
+                        sub_msg = {"action": "subscribe", "params": formatted_symbols}
                         
-                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with params format: {symbols_string[:50]}...")
+                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(formatted_symbols)} symbols")
                         
                         await ws.send_json(sub_msg)
                         print(f"[trade_feed] Subscription request sent")
