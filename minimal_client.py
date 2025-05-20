@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 API_KEY = os.getenv("POLYGON_KEY")
-WS_URL = "wss://socket.polygon.io/stocks"  # Try stocks endpoint instead
+WS_URL = "wss://socket.polygon.io/options"  # Correct endpoint for options data
 
 async def run():
     print(f"Connecting to {WS_URL}")

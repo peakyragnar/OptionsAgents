@@ -10,8 +10,7 @@ load_dotenv()
 
 # Configuration
 API_KEY = os.getenv("POLYGON_KEY")
-WS_URL = "wss://socket.polygon.io/options"  # Real-time socket
-STOCKS_URL = "wss://socket.polygon.io/stocks"  # Try stocks instead
+WS_URL = "wss://socket.polygon.io/options"  # Real-time socket for options data
 
 # Messages
 AUTH_MSG = json.dumps({"action": "auth", "params": API_KEY})

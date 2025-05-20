@@ -12,15 +12,6 @@ __pycache__/
 # virtual environment
 .venv/
 
-# data & logs
-data/
-market.duckdb
-*.parquet
-*.log
 
-# scratch / one-offs
-dealer_gamma_profile.png
-debug_gamma.py
-run_direct_gamma.py
-lists/
+
 

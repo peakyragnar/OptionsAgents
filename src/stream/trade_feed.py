@@ -45,30 +45,26 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                     if os.environ.get("OA_DEBUG"):
                         print(f"[trade_feed] Symbols to subscribe [{len(symbols)}]: {symbols[:5]}...")
                     
-                    # subscribe in chunks of 50 tickers or less (smaller chunks)
-                    CHUNK = 50
+                    # Subscribe in chunks of 100 tickers per message
+                    CHUNK = 100  # max tickers per message
                     for i in range(0, len(symbols), CHUNK):
-                        batch = symbols[i : i + CHUNK]
+                        # Format with 'T.' prefix for trades
+                        batch = [f"T.{s}" for s in symbols[i:i+CHUNK]]
                         
-                        # Format according to Polygon docs: params must be an ARRAY of strings
-                        # Each string should be in the format "OT.{symbol}"
-                        formatted_symbols = [f"OT.{symbol}" for symbol in batch]
-                        sub_msg = {"action": "subscribe", "params": formatted_symbols}
+                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(batch)} symbols")
                         
-                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(formatted_symbols)} symbols")
-                        
-                        await ws.send_json(sub_msg)
+                        # Send subscription message
+                        await ws.send_json({"action": "subscribe", "params": batch})
                         print(f"[trade_feed] Subscription request sent")
                         
                         # Add a small delay between subscription batches
                         await asyncio.sleep(0.5)
                     
-                    # FALLBACK: Also subscribe to ALL SPX options using wildcard
-                    # This ensures we'll get some trades even if the specific symbols aren't trading
-                    print("[trade_feed] Adding wildcard subscription for all SPX options")
-                    wildcard_sub = {"action": "subscribe", "params": ["OT.O:SPX*"]}
+                    # FALLBACK: Subscribe to all option trades as a wildcard
+                    print("[trade_feed] Adding wildcard subscription for all option trades")
+                    wildcard_sub = {"action": "subscribe", "params": ["T.*"]}
                     await ws.send_json(wildcard_sub)
-                    print("[trade_feed] Wildcard subscription sent")
+                    print("[trade_feed] All option trades wildcard subscription sent")
                     
                     # Reset backoff after successful connection
                     backoff = 1
