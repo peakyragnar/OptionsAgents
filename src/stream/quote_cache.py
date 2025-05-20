@@ -17,7 +17,8 @@ from pathlib import Path
 
 import aiohttp
 
-from data.contract_loader import todays_spx_0dte_contracts
+# discover contracts only when the poller starts
+from src.data.contract_loader import todays_spx_0dte_contracts
 from . import polygon_client
 
 
@@ -26,15 +27,8 @@ from . import polygon_client
 # --------------------------------------------------------------------- #
 
 _SNAPSHOT_DIR = Path("data/snapshots")
-_UNIVERSE: list[str] = todays_spx_0dte_contracts(_SNAPSHOT_DIR)
-
-if not _UNIVERSE:
-    raise RuntimeError(
-        f"No 0-DTE contracts found in {_SNAPSHOT_DIR}. "
-        "Run the snapshot job or drop a mock parquet for tests."
-    )
-
-print(f"quote_cache: tracking {len(_UNIVERSE)} contracts")
+# will be populated the first time run() is called
+_UNIVERSE: list[str] | None = None
 
 
 # --------------------------------------------------------------------- #
@@ -81,6 +75,37 @@ async def run(poll_ms: int = 250, max_concurrency: int = 50) -> None:
     * max_concurrency – keep ≤ this many HTTP requests in flight
                         (Polygon Advanced tier allows 50 rps).
     """
+    global _UNIVERSE
+
+    # -----------------------------------------------------------------
+    # build universe on first entry
+    # -----------------------------------------------------------------
+    if _UNIVERSE is None:
+        _UNIVERSE = todays_spx_0dte_contracts(_SNAPSHOT_DIR)
+
+        if not _UNIVERSE:                       # snapshot missing ⇒ REST fallback
+            async def _polygon_universe() -> list[str]:
+                url = "https://api.polygon.io/v3/reference/options/contracts"
+                today = datetime.date.today().isoformat()
+                params = {
+                    "underlying_ticker": "SPX",
+                    "expiration_date":   today,
+                    "limit":             1000,
+                    "apiKey":            os.environ["POLYGON_KEY"],
+                }
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(url, params=params, timeout=10) as r:
+                        r.raise_for_status()
+                        js = await r.json()
+                        return [c["ticker"] for c in js.get("results", [])]
+
+            _UNIVERSE = await _polygon_universe()
+
+        if not _UNIVERSE:
+            raise RuntimeError("quote_cache: no 0-DTE SPX symbols available.")
+
+        print(f"quote_cache: tracking {len(_UNIVERSE)} contracts")
+
     sem = asyncio.Semaphore(max_concurrency)
 
     async with aiohttp.ClientSession() as sess:
