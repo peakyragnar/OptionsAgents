@@ -20,7 +20,7 @@ _KEY = os.environ.get("POLYGON_KEY", "DUMMY_KEY")      # tests patch this
 # Helper builds the websocket URL
 def _ws_url(delayed: bool) -> str:
     root = "wss://delayed.polygon.io" if delayed else "wss://socket.polygon.io"
-    return f"{root}/options?apiKey={_KEY}"
+    return f"{root}/options"     # key no longer in URL
 
 async def run(symbols: list[str], *, delayed: bool = False) -> None:
     """
@@ -38,18 +38,17 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                 async with sess.ws_connect(url, heartbeat=30, timeout=60) as ws:
                     print(f"[trade_feed] Connected to {url}")
                     
-                    # Send auth message first
+                    # 1) authenticate
                     await ws.send_json({"action": "auth", "params": _KEY})
                     
                     # Look for debug environment variable to print symbols
                     if os.environ.get("OA_DEBUG"):
                         print(f"[trade_feed] Symbols to subscribe [{len(symbols)}]: {symbols[:5]}...")
                     
-                    # Subscribe in chunks of 100 tickers per message
+                    # 2) subscribe to trades in ≤100-symbol chunks
                     CHUNK = 100  # max tickers per message
                     for i in range(0, len(symbols), CHUNK):
-                        # Format with 'T.' prefix for trades
-                        batch = [f"T.{s}" for s in symbols[i:i+CHUNK]]
+                        batch = [f"T.{sym}" for sym in symbols[i:i+CHUNK]]
                         
                         print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(batch)} symbols")
                         
