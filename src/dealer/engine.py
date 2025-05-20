@@ -12,7 +12,7 @@ run(snapshot_cb: Callable[[float, float], None], *,
     snapshot_interval: float = 1.0) -> None
 """
 from __future__ import annotations
-import asyncio, time, math
+import asyncio, time, math, datetime as dt
 from typing import Callable
 
 from src.stream.trade_feed import TRADE_Q
@@ -44,7 +44,12 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
 
     # parse OCC ticker
     occ = parse_occ(sym)
-    tau = (occ.expiry - time.gmtime(msg["t"] / 1e9).tm_yday) / 365         # crude
+    
+    # Calculate time to expiry properly
+    trade_d  = dt.datetime.utcfromtimestamp(msg["t"] / 1e9).date()
+    tau_days = (occ.expiry - trade_d).days
+    tau      = tau_days / 365.0
+    
     if tau <= 0:
         return
 
