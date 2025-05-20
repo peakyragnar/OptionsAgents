@@ -53,7 +53,8 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                         print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(batch)} symbols")
                         
                         # Send subscription message
-                        await ws.send_json({"action": "subscribe", "params": batch})
+                        await ws.send_json({"action": "subscribe",
+                                           "params": ",".join(batch)})   # Polygon wants a string
                         print(f"[trade_feed] Subscription request sent")
                         
                         # Add a small delay between subscription batches
@@ -61,7 +62,7 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                     
                     # FALLBACK: Subscribe to all option trades as a wildcard
                     print("[trade_feed] Adding wildcard subscription for all option trades")
-                    wildcard_sub = {"action": "subscribe", "params": ["T.*"]}
+                    wildcard_sub = {"action": "subscribe", "params": "T.*"}   # Polygon wants a string
                     await ws.send_json(wildcard_sub)
                     print("[trade_feed] All option trades wildcard subscription sent")
                     
@@ -94,12 +95,12 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                             
                             # Check if it's a trade message (list of trades)
                             if isinstance(data, list) and data:
-                                # Check if it has trade data (must have both 'ev' and 'sym' fields)
-                                if 'ev' in data[0] and data[0].get('ev') == 'OT' and 'sym' in data[0]:
+                                # Trade frames:  {"ev":"T", "sym": ... }
+                                if data[0].get("ev") == "T" and data[0].get("sym"):
                                     print(f"[trade_feed] Processing {len(data)} trade messages")
                                     for trade in data:
                                         # Only process valid trade messages
-                                        if trade.get('ev') == 'OT' and trade.get('sym') and trade.get('p') and trade.get('s'):
+                                        if trade.get('ev') == 'T' and trade.get('sym') and trade.get('p') and trade.get('s'):
                                             print(f"[trade_feed] Trade: {trade.get('sym')} {trade.get('s')}@{trade.get('p')}")
                                             await TRADE_Q.put(trade)
                                 # Handle status messages in list format
