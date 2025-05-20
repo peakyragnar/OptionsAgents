@@ -26,7 +26,12 @@ _surface = VolSurface()          # single cache instance
 _book    = StrikeBook()          # module-level so agents can inspect
 
 async def _process_trade(msg: dict, *, eps: float) -> None:
-    """Classify aggressor side, compute γ, update book."""
+    """Classify aggressor side, compute γ, update book.
+    Ignore status/heartbeat frames that have no trade fields.
+    """
+    if not {"sym", "p", "s", "t"}.issubset(msg):
+        return
+
     sym  = msg["sym"]
     price= msg["p"]
     size = msg["s"]
