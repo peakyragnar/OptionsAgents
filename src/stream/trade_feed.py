@@ -41,13 +41,24 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                     # Send auth message first
                     await ws.send_json({"action": "auth", "params": _KEY})
                     
+                    # Look for debug environment variable to print symbols
+                    if os.environ.get("OA_DEBUG"):
+                        print(f"[trade_feed] Symbols to subscribe [{len(symbols)}]: {symbols[:5]}...")
+                    
                     # subscribe in chunks of 50 tickers or less (smaller chunks)
                     CHUNK = 50
                     for i in range(0, len(symbols), CHUNK):
                         batch = symbols[i : i + CHUNK]
-                        sub_msg = {"action": "subscribe", "params": f"OT.{',OT.'.join(batch)}"}
+                        
+                        # Format according to Polygon docs: "OT.{symbol}"
+                        symbols_string = f"OT.{',OT.'.join(batch)}"
+                        sub_msg = {"action": "subscribe", "params": symbols_string}
+                        
+                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with params format: {symbols_string[:50]}...")
+                        
                         await ws.send_json(sub_msg)
-                        print(f"[trade_feed] Subscribed to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1}")
+                        print(f"[trade_feed] Subscription request sent")
+                        
                         # Add a small delay between subscription batches
                         await asyncio.sleep(0.5)
                     
@@ -71,11 +82,18 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                                 print(f"[trade_feed] Received unknown message type: {type(data)}")
                             
                             # Check if it's a trade message (list of trades)
-                            if isinstance(data, list) and data and 'ev' in data[0]:
-                                print(f"[trade_feed] Processing {len(data)} trade messages")
-                                for trade in data:
-                                    print(f"[trade_feed] Trade: {trade.get('sym')} {trade.get('s')}@{trade.get('p')}")
-                                    await TRADE_Q.put(trade)
+                            if isinstance(data, list) and data:
+                                # Check if it has trade data (must have both 'ev' and 'sym' fields)
+                                if 'ev' in data[0] and data[0].get('ev') == 'OT' and 'sym' in data[0]:
+                                    print(f"[trade_feed] Processing {len(data)} trade messages")
+                                    for trade in data:
+                                        # Only process valid trade messages
+                                        if trade.get('ev') == 'OT' and trade.get('sym') and trade.get('p') and trade.get('s'):
+                                            print(f"[trade_feed] Trade: {trade.get('sym')} {trade.get('s')}@{trade.get('p')}")
+                                            await TRADE_Q.put(trade)
+                                # Handle status messages in list format
+                                elif 'status' in data[0]:
+                                    print(f"[trade_feed] Status in list: {data[0].get('status')} - {data[0].get('message', '')}")
                             # Handle connection status messages for debugging
                             elif isinstance(data, dict) and 'status' in data:
                                 print(f"[trade_feed] Status: {data.get('status')} - {data.get('message', '')}")

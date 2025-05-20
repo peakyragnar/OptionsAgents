@@ -29,30 +29,41 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
     """Classify aggressor side, compute γ, update book.
     Ignore status/heartbeat frames that have no trade fields.
     """
+    # Handle status messages - skip them entirely
+    if "status" in msg:
+        print(f"[engine] Skipping status message: {msg.get('status')} - {msg.get('message', '')}")
+        return
+        
     # For Polygon websocket format (different from original expected format)
     # Map Polygon fields to our internal format if needed
-    if "ev" in msg and msg["ev"] == "OT":
-        # This is a Polygon options trade message
-        try:
-            # Extract data from Polygon format
-            sym = msg.get("sym")  # Option symbol
-            price = msg.get("p")  # Price
-            size = msg.get("s")   # Size
-            timestamp = msg.get("t")  # Timestamp in nanoseconds
-            
-            # Log trade for debugging
-            print(f"[engine] Processing trade: {sym} {size}@{price}")
-            
-            # Create standardized message
-            trade_msg = {
-                "sym": sym,
-                "p": price,
-                "s": size,
-                "t": timestamp
-            }
-            msg = trade_msg
-        except KeyError as e:
-            print(f"[engine] Missing field in trade message: {e}")
+    if "ev" in msg:
+        # Check if this is a valid trade message
+        if msg.get("ev") == "OT" and all(k in msg for k in ["sym", "p", "s", "t"]):
+            # This is a Polygon options trade message
+            try:
+                # Extract data from Polygon format
+                sym = msg.get("sym")  # Option symbol
+                price = msg.get("p")  # Price
+                size = msg.get("s")   # Size
+                timestamp = msg.get("t")  # Timestamp in nanoseconds
+                
+                # Log trade for debugging
+                print(f"[engine] Processing trade: {sym} {size}@{price}")
+                
+                # Create standardized message
+                trade_msg = {
+                    "sym": sym,
+                    "p": price,
+                    "s": size,
+                    "t": timestamp
+                }
+                msg = trade_msg
+            except KeyError as e:
+                print(f"[engine] Missing field in trade message: {e}")
+                return
+        else:
+            # This is a different message type - log and skip
+            print(f"[engine] Skipping message with event type '{msg.get('ev')}', fields: {msg.keys()}")
             return
     
     # Verify we have all required fields
