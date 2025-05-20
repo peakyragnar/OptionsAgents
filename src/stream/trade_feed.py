@@ -14,6 +14,9 @@ from __future__ import annotations
 import asyncio, json, os, aiohttp, datetime as _dt
 from typing import Final
 
+# Import quotes from quote_cache to filter trades
+from src.stream.quote_cache import quotes
+
 TRADE_Q: Final[asyncio.Queue[dict]] = asyncio.Queue(maxsize=20_000)
 _KEY = os.environ.get("POLYGON_KEY", "DUMMY_KEY")      # tests patch this
 
@@ -101,8 +104,13 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                                     for trade in data:
                                         # Only process valid trade messages
                                         if trade.get('ev') == 'T' and trade.get('sym') and trade.get('p') and trade.get('s'):
-                                            print(f"[trade_feed] Trade: {trade.get('sym')} {trade.get('s')}@{trade.get('p')}")
-                                            await TRADE_Q.put(trade)
+                                            symbol = trade.get('sym')
+                                            print(f"[trade_feed] Trade: {symbol} {trade.get('s')}@{trade.get('p')}")
+                                            # Only forward trades for symbols we already track NBBO for
+                                            if symbol in quotes:
+                                                await TRADE_Q.put(trade)
+                                            else:
+                                                print(f"[trade_feed] Skipping trade for {symbol} (no NBBO data)"
                                 # Handle status messages in list format
                                 elif 'status' in data[0]:
                                     print(f"[trade_feed] Status in list: {data[0].get('status')} - {data[0].get('message', '')}")
