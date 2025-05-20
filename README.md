@@ -1,6 +1,24 @@
 # Options Agents
 
-Tools for real-time options data collection, analysis, and dealer gamma visualization.
+Real-time options market data processing and dealer gamma exposure tracking.
+
+## Architecture
+
+The system consists of several key components:
+
+1. **Data Collection**
+   - Snapshots: Daily options chain capture to Parquet files
+   - Quote Cache: Real-time NBBO quotes for options
+   - Trade Feed: WebSocket connection to Polygon.io options trades
+
+2. **Processing Engine**
+   - Dealer Engine: Classifies trades and calculates gamma exposure
+   - Strike Book: Tracks positions and gamma by strike price
+   - Volatility Surface: Caches and calculates implied volatility
+
+3. **Persistence**
+   - DuckDB: Stores dealer gamma snapshots for analysis
+   - Parquet: Stores option chain data efficiently
 
 ## Setup
 
@@ -15,16 +33,39 @@ Tools for real-time options data collection, analysis, and dealer gamma visualiz
    pip install -r requirements.txt
    ```
 
-3. Create a `.env` file with your Polygon.io API key:
+3. Create a `.env` file with your API keys:
    ```
    POLYGON_KEY=your_polygon_api_key_here
+   OA_GAMMA_DB=path/to/your/database.db  # Optional, defaults to data/intraday.db
    ```
+
+## Command Line Interface
+
+The system provides a Typer-based CLI:
+
+```bash
+python -m src.cli live
+```
+
+This launches the complete system:
+- Quote cache for real-time option quotes
+- Trade feed for streaming trades from Polygon
+- Dealer engine for processing trades and calculating gamma
+- Automatic snapshots saved to DuckDB
+
+### Offline Replay
+
+For back-testing with historical data:
+
+```bash
+python -m src.cli replay path/to/trades.parquet
+```
 
 ## Data Collection
 
 ### One-time Snapshot
 
-To capture a single snapshot of the SPX options chain:
+Capture a snapshot of the SPX options chain:
 
 ```bash
 python -m src.ingest.snapshot
@@ -32,55 +73,50 @@ python -m src.ingest.snapshot
 
 This saves data to `data/parquet/spx/date=YYYY-MM-DD/HH_MM_SS.parquet`
 
-### Streaming Real-time Data
+### Quote Cache
 
-To stream real-time options data and build dealer positioning:
+The quote cache maintains the latest NBBO (National Best Bid and Offer) for all options:
 
-```bash
-python -m src.stream.run_ws_with_snapshots
+```python
+from src.stream.quote_cache import quotes, run as quotes_run
+# quotes is a dict mapping symbols to (bid, ask, timestamp) tuples
 ```
 
-This will:
-1. Connect to Polygon.io WebSocket API
-2. Process options quotes and trades
-3. Track dealer positioning in real-time
-4. Save snapshots every 5 minutes to `data/intraday/`
+### Trade Feed
 
-### Fallback REST Simulator
+The trade feed streams option trades from Polygon.io:
 
-If the WebSocket isn't working or you need to test without live data:
-
-```bash
-USE_REST=true python -m src.stream.rest_simulator
+```python
+from src.stream.trade_feed import TRADE_Q, run as trades_run
+# TRADE_Q is an asyncio.Queue of trade dictionaries
 ```
 
-## Analysis Tools
+## Dealer Gamma Engine
 
-### Dealer Gamma Calculator
+The engine processes trades by:
+1. Classifying them as BUY/SELL based on NBBO
+2. Calculating option gamma using Black-Scholes
+3. Tracking dealer position and gamma exposure
+4. Generating periodic snapshots of gamma exposure
 
-Calculate dealer gamma exposure from option chain data:
-
-```bash
-python -m src.tools.dealer_gamma
+```python
+from src.dealer.engine import run as engine_run, _book
+# _book contains the current state of dealer positions
 ```
 
-### View Recreation
+## Options Greeks
 
-If you need to recreate DuckDB views with proper column types:
+Options Greeks are calculated using the Black-Scholes model in `src.utils.greeks`:
 
-```bash
-python -m src.tools.recreate_views
+```python
+from src.utils.greeks import gamma, implied_vol_call, implied_vol_put
 ```
 
-## Options Greeks 
-
-Options Greeks are calculated using the Black-Scholes model in `src.utils.greeks`.
-
-The following Greeks are supported:
-- Delta
-- Gamma
-- Vega
-- Theta
+Supported Greeks:
+- Delta: Option price sensitivity to underlying price
+- Gamma: Rate of change of delta (key for dealer hedging)
+- Vega: Option price sensitivity to volatility
+- Theta: Option price decay over time
 
 ## Troubleshooting
 
@@ -88,11 +124,10 @@ The following Greeks are supported:
 
 1. Verify your API key in the `.env` file
 2. Check if US markets are open (9:30 AM - 4:00 PM ET, weekdays)
-3. Ensure your network allows WebSocket connections
+3. Connection failures are handled automatically with reconnection logic
 
-### Missing or Zero Gamma Values
+### Database Configuration
 
-If gamma values are zero or missing, verify:
-1. Data types are properly cast to DOUBLE in DuckDB
-2. Implied volatility values are valid (not NULL or zero)
-3. Time to expiry is properly calculated
+- Set `OA_GAMMA_DB` environment variable to customize the database location
+- The DB is auto-created on first run
+- Use read-only connections for analysis to avoid conflicts

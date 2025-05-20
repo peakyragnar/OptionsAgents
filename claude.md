@@ -1,137 +1,174 @@
-Below is a ready-to-paste README.md that you can drop into the root of your OptionsAgents workspace (or view inside any IDE).
-It documents the project’s purpose, architecture, directory layout, environment setup, daily usage, and the test/CI pipeline we have implemented so far.
+# Options Agents - Overview and Usage Guidelines
 
-⸻
+This document provides an overview of the Options Agents project as of the latest update. Use this as a reference for the project's architecture, setup, and usage.
 
+## Current Project State
 
-# OptionsAgents – 0-DTE SPY Trading Agent (Phase 1)
-
-## Purpose
-Automate the data-collection and analytics pipeline required for a
-dealer-gamma-aware 0-DTE SPY options strategy, using:
-* **Parquet snapshots** for raw minute data  
-* **DuckDB** for fast local analytics  
-* **Polygon.io** as the market-data source  
-* A staged roll-out towards an agentic trading system (planner, risk-guard, execution)
-
-**Current milestone:**  
-*Ingest minute snapshots of the SPX 0-DTE option chain, store them in a partitioned Parquet layout, and prove the data are readable via DuckDB and unit-tests.*
+The Options Agents project has evolved into a comprehensive system for real-time options market data processing and dealer gamma exposure tracking. Below is the current README content that reflects the latest state of the project.
 
 ---
 
-## Directory Layout (phase 1)
+# Options Agents
 
-OptionsAgents/
-├── data/
-│   └── parquet/                # append-only raw snapshots
-│       └── spx/
-│           └── date=YYYY-MM-DD/
-│               └── HH_MM_SS.parquet
-├── src/
-│   └── ingest/
-│       └── snapshot.py         # pulls one SPX snapshot & writes Parquet
-├── tests/
-│   └── test_snapshot.py        # two unit tests (file exists, duckdb query)
-├── .env                        # your Polygon key (ignored in Git)
-├── .env.example                # template, committed
-├── .gitignore
-└── README.md
+Real-time options market data processing and dealer gamma exposure tracking.
 
----
+## Architecture
 
-## Environment Setup (macOS / zsh)
+The system consists of several key components:
+
+1. **Data Collection**
+   - Snapshots: Daily options chain capture to Parquet files
+   - Quote Cache: Real-time NBBO quotes for options
+   - Trade Feed: WebSocket connection to Polygon.io options trades
+
+2. **Processing Engine**
+   - Dealer Engine: Classifies trades and calculates gamma exposure
+   - Strike Book: Tracks positions and gamma by strike price
+   - Volatility Surface: Caches and calculates implied volatility
+
+3. **Persistence**
+   - DuckDB: Stores dealer gamma snapshots for analysis
+   - Parquet: Stores option chain data efficiently
+
+## Setup
+
+1. Create a Python virtual environment:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Create a `.env` file with your API keys:
+   ```
+   POLYGON_KEY=your_polygon_api_key_here
+   OA_GAMMA_DB=path/to/your/database.db  # Optional, defaults to data/intraday.db
+   ```
+
+## Command Line Interface
+
+The system provides a Typer-based CLI:
 
 ```bash
-# 1. clone repo and enter dir
-git clone <url> OptionsAgents
-cd OptionsAgents
+python -m src.cli live
+```
 
-# 2. activate Python 3.11 (pyenv example)
-pyenv install 3.11.9           # once, if not present
-pyenv virtualenv 3.11.9 oa-env
-pyenv local oa-env             # auto-activates in this folder
+This launches the complete system:
+- Quote cache for real-time option quotes
+- Trade feed for streaming trades from Polygon
+- Dealer engine for processing trades and calculating gamma
+- Automatic snapshots saved to DuckDB
 
-# 3. install libs
-pip install --upgrade pip
-pip install pandas pyarrow duckdb polygon-api-client python-dotenv pytest
+### Offline Replay
 
-# 4. secrets
-cp .env.example .env           # then edit .env and paste your POLYGON_KEY
+For back-testing with historical data:
 
-Note: .env is git-ignored; .env.example stays in the repo as documentation.
+```bash
+python -m src.cli replay path/to/trades.parquet
+```
 
-⸻
+## Data Collection
 
-One-shot Ingest / Smoke Test
+### One-time Snapshot
 
-python src/ingest/snapshot.py
-# -> "Wrote N rows → data/parquet/spx/date=YYYY-MM-DD/HH_MM_SS.parquet"
+Capture a snapshot of the SPX options chain:
 
-duckdb -c "SELECT COUNT(*) FROM parquet_scan('data/parquet/spx/date=*/*.parquet');"
-# -> returns non-zero row count
+```bash
+python -m src.ingest.snapshot
+```
 
+This saves data to `data/parquet/spx/date=YYYY-MM-DD/HH_MM_SS.parquet`
 
-⸻
+### Quote Cache
 
-Automated Tests
+The quote cache maintains the latest NBBO (National Best Bid and Offer) for all options:
 
-pytest -q
-# ..   (2 tests should pass)
+```python
+from src.stream.quote_cache import quotes, run as quotes_run
+# quotes is a dict mapping symbols to (bid, ask, timestamp) tuples
+```
 
-tests/test_snapshot.py
-	•	verifies a Parquet file is written
-	•	verifies DuckDB can read a fixture Parquet
+### Trade Feed
 
-⸻
+The trade feed streams option trades from Polygon.io:
 
-Continuous Integration (add when ready)
+```python
+from src.stream.trade_feed import TRADE_Q, run as trades_run
+# TRADE_Q is an asyncio.Queue of trade dictionaries
+```
 
-.github/workflows/ci.yml
+## Dealer Gamma Engine
 
-name: CI
-on: [push, pull_request]
-jobs:
-  tests:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
-      - run: pip install pandas pyarrow duckdb pytest
-      - run: pytest -q
+The engine processes trades by:
+1. Classifying them as BUY/SELL based on NBBO
+2. Calculating option gamma using Black-Scholes
+3. Tracking dealer position and gamma exposure
+4. Generating periodic snapshots of gamma exposure
 
-Every push runs the same two tests on a clean macOS runner.
+```python
+from src.dealer.engine import run as engine_run, _book
+# _book contains the current state of dealer positions
+```
 
-⸻
+## Options Greeks
 
-Next Milestones
+Options Greeks are calculated using the Black-Scholes model in `src.utils.greeks`:
 
-Phase	Objective
-2 – Ingestion loop	Schedule snapshot.py to run every minute during market hours (launchd or cron).
-3 – Analytics view	Create DuckDB views (spx_chain, later spy_chain) over the Parquet folder; extend tests to assert the view row-count > 0.
-4 – Deterministic tools	Implement implied_move_calc, dealer_gamma_snapshot, etc., with unit tests.
-5 – Planner agent (advisory)	Introduce a function-calling LLM that uses those tools to propose a daily iron-condor; human approval only.
-6 – Risk / execution layers	Add risk-guard agent, then paper-trade execution, then live micro-size.
+```python
+from src.utils.greeks import gamma, implied_vol_call, implied_vol_put
+```
 
+Supported Greeks:
+- Delta: Option price sensitivity to underlying price
+- Gamma: Rate of change of delta (key for dealer hedging)
+- Vega: Option price sensitivity to volatility
+- Theta: Option price decay over time
 
-⸻
+## Troubleshooting
 
-Quick Commands Reference
+### WebSocket Connection Issues
 
-# pull one new snapshot manually
-python src/ingest/snapshot.py
+1. Verify your API key in the `.env` file
+2. Check if US markets are open (9:30 AM - 4:00 PM ET, weekdays)
+3. Connection failures are handled automatically with reconnection logic
 
-# run all unit tests
-pytest -q
+### Database Configuration
 
-# interactive SQL on all Parquet files
-duckdb
-.duckdb> SELECT strike, bid, ask
-         FROM parquet_scan('data/parquet/spx/date=*/*.parquet')
-         WHERE delta IS NOT NULL LIMIT 5;
+- Set `OA_GAMMA_DB` environment variable to customize the database location
+- The DB is auto-created on first run
+- Use read-only connections for analysis to avoid conflicts
 
+---
 
-⸻
+## Development History
 
-Happy building!  Each subsequent milestone layers on top of this foundation without changing the storage layout or test harness.
+The project has evolved through several phases:
+1. Initial setup with basic data collection
+2. Addition of DuckDB for analytics
+3. Implementation of WebSocket streaming for real-time data
+4. Development of dealer gamma calculations
+5. Integration of all components with a CLI interface
 
+## Future Enhancements
+
+Potential areas for future development:
+1. Add visualization tools for gamma exposure
+2. Implement strategy recommendation based on dealer gamma
+3. Integrate with trading platforms for execution
+4. Add more sophisticated analytics and machine learning models
+
+## Testing
+
+Run the tests to ensure everything is working correctly:
+
+```bash
+# Run all tests
+python -m pytest
+
+# Run specific test modules
+python -m pytest tests/test_engine.py
+```
