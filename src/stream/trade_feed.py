@@ -58,9 +58,23 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                     async for msg in ws:
                         if msg.type is aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
-                            # Check if it's a status message
+                            
+                            # Enhanced debugging - print all message types
+                            if isinstance(data, dict):
+                                print(f"[trade_feed] Received dict message: {data.keys()}")
+                            elif isinstance(data, list) and data:
+                                if len(data) > 0:
+                                    print(f"[trade_feed] Received list message [{len(data)} items]: {data[0].keys() if isinstance(data[0], dict) and data[0] else 'empty'}")
+                                else:
+                                    print(f"[trade_feed] Received empty list message")
+                            else:
+                                print(f"[trade_feed] Received unknown message type: {type(data)}")
+                            
+                            # Check if it's a trade message (list of trades)
                             if isinstance(data, list) and data and 'ev' in data[0]:
+                                print(f"[trade_feed] Processing {len(data)} trade messages")
                                 for trade in data:
+                                    print(f"[trade_feed] Trade: {trade.get('sym')} {trade.get('s')}@{trade.get('p')}")
                                     await TRADE_Q.put(trade)
                             # Handle connection status messages for debugging
                             elif isinstance(data, dict) and 'status' in data:
