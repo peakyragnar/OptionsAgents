@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from src.utils.greeks import implied_vol as iv_call   # adjust if your fn name differs
+from src.utils.greeks import implied_vol_call as iv_call
 
 @dataclass
 class _CacheRow:

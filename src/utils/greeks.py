@@ -145,3 +145,59 @@ def estimate_vol_from_moneyness(moneyness, base_vol=0.20):
     # ATM options have lowest vol, vol increases as you move away from ATM
     vol = base_vol + 0.5 * moneyness**2
     return min(vol, 1.5)  # Cap at 150% to avoid extreme values
+
+# Functions required by the engine test
+def gamma(s, k, iv, tau, cp=None):
+    """
+    Extract gamma from bs_greeks for backward compatibility.
+    
+    Parameters:
+    s: spot price
+    k: strike price
+    iv: implied volatility
+    tau: time to expiry in years
+    cp: option type (ignored, included for compatibility)
+    
+    Returns:
+    gamma value only
+    """
+    g, _, _ = bs_greeks(s, k, iv, tau, "C" if cp is None else cp)
+    return g
+
+# Call-specific implied vol function
+def implied_vol_call(price, s, k, tau, r=0, q=0):
+    """
+    Calculate implied volatility for call options.
+    Wrapper around implied_vol for backward compatibility.
+    
+    Parameters:
+    price: option price
+    s: spot price
+    k: strike price
+    tau: time to expiry in years
+    r: risk-free rate (ignored, included for compatibility)
+    q: dividend yield (ignored, included for compatibility)
+    
+    Returns:
+    implied volatility
+    """
+    return implied_vol(price, s, k, tau, "C")
+
+# Put-specific implied vol function for symmetry
+def implied_vol_put(price, s, k, tau, r=0, q=0):
+    """
+    Calculate implied volatility for put options.
+    Wrapper around implied_vol for backward compatibility.
+    
+    Parameters:
+    price: option price
+    s: spot price
+    k: strike price
+    tau: time to expiry in years
+    r: risk-free rate (ignored, included for compatibility)
+    q: dividend yield (ignored, included for compatibility)
+    
+    Returns:
+    implied volatility
+    """
+    return implied_vol(price, s, k, tau, "P")
