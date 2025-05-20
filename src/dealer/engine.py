@@ -109,10 +109,10 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
         # Get current SPX price (hard-coded for now, should fetch from real-time feed)
         spx_price = 5000  # Replace with actual SPX price lookup
         
-        # Calculate mid price for IV calculation
+        # Calculate mid price for IV calculation and Greeks
         mid = (bid + ask) * 0.5
         
-        # Get implied volatility
+        # Get implied volatility using mid price (not trade price)
         sigma = _surface.get_sigma(sym, mid, S=spx_price, K=occ.strike, tau=tau)
         
         if math.isnan(sigma) or sigma <= 0:

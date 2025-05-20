@@ -17,6 +17,22 @@ from typing import Final
 # Import quotes from quote_cache to filter trades
 from src.stream.quote_cache import quotes
 
+
+async def handle_trade(msg: dict):
+    """Process a trade message and put it in the queue if needed."""
+    sym = msg.get("sym")
+    
+    # Only forward trades for symbols we have quotes for
+    quote_data = quotes.get(sym)
+    if quote_data is None:
+        # First trade may precede first quote - harmless to ignore once
+        print(f"[trade_feed] Skipping trade for {sym} (no NBBO data)")
+        return
+    
+    # We have quote data, process the trade
+    print(f"[trade_feed] Trade: {sym} {msg.get('s')}@{msg.get('p')}")
+    await TRADE_Q.put(msg)
+
 TRADE_Q: Final[asyncio.Queue[dict]] = asyncio.Queue(maxsize=20_000)
 _KEY = os.environ.get("POLYGON_KEY", "DUMMY_KEY")      # tests patch this
 
@@ -63,11 +79,12 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                         # Add a small delay between subscription batches
                         await asyncio.sleep(0.5)
                     
-                    # FALLBACK: Subscribe to all option trades as a wildcard
-                    print("[trade_feed] Adding wildcard subscription for all option trades")
-                    wildcard_sub = {"action": "subscribe", "params": "T.*"}   # Polygon wants a string
+                    # FALLBACK: Subscribe to all option trades and quotes as a wildcard
+                    print("[trade_feed] Adding wildcard subscription for all option trades and quotes")
+                    channel_list = ["T.*", "Q.*"]   # trades + NBBO quotes
+                    wildcard_sub = {"action": "subscribe", "params": ",".join(channel_list)}   # Polygon wants a string
                     await ws.send_json(wildcard_sub)
-                    print("[trade_feed] All option trades wildcard subscription sent")
+                    print("[trade_feed] All option trades and quotes wildcard subscription sent")
                     
                     # Reset backoff after successful connection
                     backoff = 1
@@ -98,19 +115,24 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                             
                             # Check if it's a trade message (list of trades)
                             if isinstance(data, list) and data:
+                                ev = data[0].get("ev")
+                                
                                 # Trade frames:  {"ev":"T", "sym": ... }
-                                if data[0].get("ev") == "T" and data[0].get("sym"):
+                                if ev == "T":  # Trade
                                     print(f"[trade_feed] Processing {len(data)} trade messages")
                                     for trade in data:
                                         # Only process valid trade messages
                                         if trade.get('ev') == 'T' and trade.get('sym') and trade.get('p') and trade.get('s'):
-                                            symbol = trade.get('sym')
-                                            print(f"[trade_feed] Trade: {symbol} {trade.get('s')}@{trade.get('p')}")
-                                            # Only forward trades for symbols we already track NBBO for
-                                            if symbol in quotes:
-                                                await TRADE_Q.put(trade)
-                                            else:
-                                                print(f"[trade_feed] Skipping trade for {symbol} (no NBBO data)"
+                                            await handle_trade(trade)
+                                # Quote frames: {"ev":"Q", "sym": ... }
+                                elif ev == "Q":  # Quote
+                                    print(f"[trade_feed] Processing {len(data)} quote messages")
+                                    for quote in data:
+                                        if quote.get('ev') == 'Q' and quote.get('sym') and 'bp' in quote and 'ap' in quote:
+                                            symbol = quote.get('sym')
+                                            quotes[symbol] = (quote.get('bp', 0), quote.get('ap', 0), quote.get('t', 0))
+                                            print(f"[trade_feed] Updated NBBO for {symbol}: {quote.get('bp')} x {quote.get('ap')}")
+                                
                                 # Handle status messages in list format
                                 elif 'status' in data[0]:
                                     print(f"[trade_feed] Status in list: {data[0].get('status')} - {data[0].get('message', '')}")
