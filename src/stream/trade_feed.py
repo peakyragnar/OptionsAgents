@@ -63,6 +63,13 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                         # Add a small delay between subscription batches
                         await asyncio.sleep(0.5)
                     
+                    # FALLBACK: Also subscribe to ALL SPX options using wildcard
+                    # This ensures we'll get some trades even if the specific symbols aren't trading
+                    print("[trade_feed] Adding wildcard subscription for all SPX options")
+                    wildcard_sub = {"action": "subscribe", "params": ["OT.O:SPX*"]}
+                    await ws.send_json(wildcard_sub)
+                    print("[trade_feed] Wildcard subscription sent")
+                    
                     # Reset backoff after successful connection
                     backoff = 1
                     
@@ -71,16 +78,24 @@ async def run(symbols: list[str], *, delayed: bool = False) -> None:
                         if msg.type is aiohttp.WSMsgType.TEXT:
                             data = json.loads(msg.data)
                             
-                            # Enhanced debugging - print all message types
+                            # Enhanced debugging - print all message types with more details
                             if isinstance(data, dict):
                                 print(f"[trade_feed] Received dict message: {data.keys()}")
+                                # Print the entire dict for debugging
+                                print(f"[trade_feed] FULL DICT: {json.dumps(data)}")
                             elif isinstance(data, list) and data:
                                 if len(data) > 0:
-                                    print(f"[trade_feed] Received list message [{len(data)} items]: {data[0].keys() if isinstance(data[0], dict) and data[0] else 'empty'}")
+                                    key_info = data[0].keys() if isinstance(data[0], dict) and data[0] else 'empty'
+                                    print(f"[trade_feed] Received list message [{len(data)} items]: {key_info}")
+                                    
+                                    # Print the first item in full for debugging
+                                    if isinstance(data[0], dict):
+                                        print(f"[trade_feed] SAMPLE LIST ITEM: {json.dumps(data[0])}")
                                 else:
                                     print(f"[trade_feed] Received empty list message")
                             else:
                                 print(f"[trade_feed] Received unknown message type: {type(data)}")
+                                print(f"[trade_feed] RAW DATA: {data}")
                             
                             # Check if it's a trade message (list of trades)
                             if isinstance(data, list) and data:
