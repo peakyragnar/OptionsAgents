@@ -16,8 +16,29 @@ def live():
     Run quote cache, trade feed, and dealer-gamma engine in real time.
     Snapshots are written to DuckDB every second.
     """
+    import os
     from src.data.contract_loader import todays_spx_0dte_contracts
+    
+    # Set a unique database file for this run to avoid lock conflicts
+    os.environ["OA_GAMMA_DB"] = "data/live.db"
+    
+    # Load today's contracts
     symbols = todays_spx_0dte_contracts(pathlib.Path("data/snapshots"))
+    
+    if not symbols:
+        print("Warning: No symbols loaded. Make sure the snapshot file exists.")
+        print("Using test symbols instead...")
+        # Add a few test symbols if no real ones are found
+        symbols = [
+            "O:SPX240520C04800000",
+            "O:SPX240520P04800000",
+            "O:SPX240520C04900000",
+            "O:SPX240520P04900000",
+            "O:SPX240520C05000000",
+            "O:SPX240520P05000000",
+        ]
+    
+    print(f"Starting live mode with {len(symbols)} symbols")
 
     async def main():
         await asyncio.gather(
