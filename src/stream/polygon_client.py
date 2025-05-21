@@ -1,5 +1,11 @@
-import os, aiohttp, asyncio, json, websocket  # websocket-client pkg
+import os, aiohttp, asyncio, json, websocket, ssl, time, logging  # websocket-client pkg
 from typing import Any
+
+def _first_dict(msg):
+    """Polygon wraps every control frame in a 1-element list; unwrap it."""
+    if isinstance(msg, list):
+        return msg[0] if msg else {}
+    return msg
 
 _BASE = "https://api.polygon.io/v3/quotes/{}"
 _API_KEY = os.environ["POLYGON_KEY"]
@@ -14,29 +20,30 @@ async def fetch_quote(sess: aiohttp.ClientSession, occ_ticker: str):
 
 
 # --------------------------------------------------------------------------- #
-def make_ws(url: str) -> websocket.WebSocket:
-    """
-    Open a Polygon websocket, perform auth handshake, and return the live
-    socket ready for subscribe() calls.
-    """
-    ws = websocket.create_connection(url, ping_interval=30, ping_timeout=10)
+def make_ws(url: str):
+    ws = websocket.create_connection(url, ping_interval=30)
 
-    # --- send auth frame ----------------------------------------------------
-    ws.send(json.dumps({"action": "auth", "params": _API_KEY}))
+    # 1️⃣  initial "connected" frame ----------------------------------------
+    raw = ws.recv()
+    print("RAW FRAME-1:", raw)          #  <<––-- add this
+    frame = _first_dict(json.loads(raw))
+    if frame.get("status") != "connected":
+        raise RuntimeError(f"Polygon WS handshake failed: {frame}")
 
-    # Polygon sends one or more status frames:
-    #   1) {'status':'connected',     …}
-    #   2) {'status':'auth_success',  …}
-    # Loop until we see auth_success or an explicit auth_failed
-    while True:
-        raw   = ws.recv()
-        frame = json.loads(raw)
-        if isinstance(frame, list):
-            frame = frame[0] if frame else {}
+    # 2️⃣  send auth --------------------------------------------------------
+    api_key = (
+        os.getenv("POLYGON_API_KEY")    # most common var name
+        or os.getenv("POLYGON_KEY")     # legacy name used elsewhere
+    )
+    if not api_key:
+        raise RuntimeError("POLYGON_API_KEY env-var not set")
+    ws.send(json.dumps({"action": "auth", "params": api_key}))
 
-        st = frame.get("status")
-        if st == "auth_success":
-            return ws            # ← all good
-        if st == "auth_failed":
-            raise RuntimeError(f"Polygon WS auth failed: {frame}")
-        # otherwise (e.g. 'connected') just keep reading
+    # 3️⃣  expect auth_success ---------------------------------------------
+    raw = ws.recv()
+    print("RAW FRAME-2:", raw)          #  <<––-- add this
+    frame = _first_dict(json.loads(raw))
+    if frame.get("status") != "auth_success":
+        raise RuntimeError(f"Polygon WS auth failed: {frame}")
+
+    return ws
