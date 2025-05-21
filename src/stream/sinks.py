@@ -34,7 +34,6 @@ class _ArrowSink:
             tbl,
             root_path=str(self._file),
             partition_cols=None, compression=_CODEC,
-            flavor="spark",  # keeps metadata for DuckDB & Polars
             existing_data_behavior="overwrite_or_ignore",
         )
         self._buf.clear()
