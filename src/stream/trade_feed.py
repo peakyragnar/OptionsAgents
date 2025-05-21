@@ -7,7 +7,7 @@ Proof-of-concept trade feed.
 Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_feed --debug
 """
 
-import os, json, logging, time, threading
+import os, json, logging, time, threading, websocket
 from datetime     import datetime, timezone
 from .polygon_client import make_ws            # you already have this
 from .quote_cache      import quote_cache      # filled by nbbo_feed.py
@@ -36,12 +36,16 @@ def run_once():
     ws.send(json.dumps({"action":"subscribe", "params": f"T.{sym}"}))
 
     # keep-alive pings (Polygon kills idle sockets ~60 s)
-    def _ping():
+    def _ping(ws):
+        """Background thread: send {"action":"ping"} every 2 s."""
         while True:
-            try:    ws.send(json.dumps({"action":"ping"}))
-            except Exception: break
-            time.sleep(PING_SECONDS)
-    threading.Thread(target=_ping, daemon=True).start()
+            try:
+                ws.send(json.dumps({"action": "ping"}))
+                time.sleep(2)
+            except Exception as e:          # socket closed – just exit thread, main loop will reconnect
+                logging.debug("ping thread exit: %s", e)
+                return
+    threading.Thread(target=_ping, args=(ws,), daemon=True).start()
 
     _LOG.info("listening for trades on %s …", sym)
     for raw in ws:
