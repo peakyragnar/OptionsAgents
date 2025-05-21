@@ -9,6 +9,7 @@ Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_
 
 import os, json, logging, time, threading, websocket
 from datetime     import datetime, timezone
+from websocket import WebSocketTimeoutException
 from .polygon_client import make_ws            # you already have this
 from .quote_cache      import quote_cache      # filled by nbbo_feed.py
 
@@ -36,24 +37,42 @@ def run_once():
     # prepend the trade-channel prefix that Polygon now requires
     trade_chan = sym if sym.startswith("T.") else f"T.{sym}"
     ws.send(json.dumps({"action":"subscribe", "params": trade_chan}))
+    
+    # Set longer timeouts for stability
+    ws.settimeout(20)
+    ws.sock.settimeout(20)          # some versions need this too
 
     # keep-alive pings (Polygon kills idle sockets ~60 s)
     def _ping(ws):
-        """Background thread: send {"action":"ping"} every 2 s."""
+        """Background thread: send {"action":"ping"} every 2 s and WebSocket ping every 10s."""
         while True:
             try:
+                # Send application-level ping
                 ws.send(json.dumps({"action": "ping"}))
                 time.sleep(2)
+                
+                # Every 5 cycles (10s), send a WebSocket protocol-level ping
+                if int(time.time()) % 10 == 0:
+                    ws.ping()
+                    
             except Exception as e:          # socket closed – just exit thread, main loop will reconnect
                 logging.debug("ping thread exit: %s", e)
                 return
     threading.Thread(target=_ping, args=(ws,), daemon=True).start()
 
     _LOG.info("listening for trades on %s …", sym)
-    for raw in ws:
-        if not raw or raw == "heartbeat":
-            continue
+    
+    # Hand-rolled loop lets us swallow timeouts
+    while True:
         try:
+            # Use recv directly instead of for-loop iteration
+            raw = ws.recv()
+            
+            # Skip empty frames or heartbeats
+            if not raw or raw == "heartbeat":
+                continue
+                
+            # Process the message
             for msg in json.loads(raw):               # Polygon wraps in list
                 if msg.get("ev") != "T":              # just in case
                     continue
@@ -64,6 +83,10 @@ def run_once():
 
                 print(f"{ts}  {side:4s}  {msg['sym']:22s} "
                       f"{msg['p']:8.2f}  x{msg['s']}")
+                      
+        except WebSocketTimeoutException:
+            # Normal timeout - just continue waiting
+            continue
         except Exception:
             _LOG.exception("bad trade msg")
 
