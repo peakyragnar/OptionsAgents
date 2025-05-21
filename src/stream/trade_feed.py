@@ -1,155 +1,82 @@
+# ---------- src/stream/trade_feed.py ----------
 """
-trade_feed.py
--------------
-Connects to Polygon's options trade websocket and streams messages into
-TRADE_Q.  A higher-level engine (dealer/engine.py) will consume the queue.
-
-Public API
-----------
-TRADE_Q : asyncio.Queue[dict]
-run(symbols: list[str], *, delayed: bool = False) -> Coroutine
+Proof-of-concept trade feed.
+  • subscribes to ONE option contract (env TRADE_SUB)
+  • looks up latest quote in quote_cache
+  • prints side-inferred trade
+Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_feed --debug
 """
 
-from __future__ import annotations
-import asyncio, json, os, aiohttp, datetime as _dt
-from typing import Final
+import os, json, logging, time, threading
+from datetime     import datetime, timezone
+from .polygon_client import make_ws            # you already have this
+from .quote_cache      import quote_cache      # filled by nbbo_feed.py
 
-# Import quotes from quote_cache to filter trades
-from src.stream.quote_cache import quotes
+_LOG = logging.getLogger("trade_feed")
+WS_URL       = "wss://socket.polygon.io/options"
+PING_SECONDS = 25
 
+def _infer_side(trd: dict, q: dict | None) -> str:
+    "Return 'BUY' | 'SELL' | '?'  using last cached NBBO."
+    if not q:
+        return "?"
+    px = trd["p"]
+    if px >= q["ask"] - 0.01:      # equity opts: ½-penny tick ok
+        return "BUY"
+    if px <= q["bid"] + 0.01:
+        return "SELL"
+    return "?"
 
-async def handle_trade(msg: dict):
-    """Process a trade message and put it in the queue if needed."""
-    sym = msg.get("sym")
-    
-    # Only forward trades for symbols we have quotes for
-    quote_data = quotes.get(sym)
-    if quote_data is None:
-        # First trade may precede first quote - harmless to ignore once
-        print(f"[trade_feed] Skipping trade for {sym} (no NBBO data)")
-        return
-    
-    # We have quote data, process the trade
-    print(f"[trade_feed] Trade: {sym} {msg.get('s')}@{msg.get('p')}")
-    await TRADE_Q.put(msg)
+def run_once():
+    sym  = os.getenv("TRADE_SUB")
+    if not sym:
+        raise RuntimeError("export TRADE_SUB='O:SPXWYYMMDDC05500000' (one OCC ticker)")
 
-TRADE_Q: Final[asyncio.Queue[dict]] = asyncio.Queue(maxsize=20_000)
-_KEY = os.environ.get("POLYGON_KEY", "DUMMY_KEY")      # tests patch this
+    ws = make_ws(WS_URL)
+    ws.send(json.dumps({"action":"subscribe", "params": f"T.{sym}"}))
 
-# Helper builds the websocket URL
-def _ws_url(delayed: bool) -> str:
-    root = "wss://delayed.polygon.io" if delayed else "wss://socket.polygon.io"
-    return f"{root}/options"     # key no longer in URL
+    # keep-alive pings (Polygon kills idle sockets ~60 s)
+    def _ping():
+        while True:
+            try:    ws.send(json.dumps({"action":"ping"}))
+            except Exception: break
+            time.sleep(PING_SECONDS)
+    threading.Thread(target=_ping, daemon=True).start()
 
-async def run(symbols: list[str], *, delayed: bool = False) -> None:
-    """
-    Start a websocket connection for *symbols* and push trade dictionaries
-    into TRADE_Q forever (reconnects on drops).
-    """
-    url = _ws_url(delayed)
-    backoff = 1  # Initial backoff in seconds
-    max_backoff = 30  # Maximum backoff in seconds
-    
+    _LOG.info("listening for trades on %s …", sym)
+    for raw in ws:
+        if not raw or raw == "heartbeat":
+            continue
+        try:
+            for msg in json.loads(raw):               # Polygon wraps in list
+                if msg.get("ev") != "T":              # just in case
+                    continue
+                q = quote_cache.get(msg["sym"])       # may be None
+                side = _infer_side(msg, q)
+                ts   = datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)\
+                                .strftime("%H:%M:%S.%f")[:-3]
+
+                print(f"{ts}  {side:4s}  {msg['sym']:22s} "
+                      f"{msg['p']:8.2f}  x{msg['s']}")
+        except Exception:
+            _LOG.exception("bad trade msg")
+
+# --------------------------------------------------------------------------- #
+if __name__ == "__main__":
+    import argparse, logging
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--debug", action="store_true")
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
     while True:
         try:
-            async with aiohttp.ClientSession() as sess:
-                # Increase timeout and heartbeat settings to help prevent disconnections
-                async with sess.ws_connect(url, heartbeat=30, timeout=60) as ws:
-                    print(f"[trade_feed] Connected to {url}")
-                    
-                    # 1) authenticate
-                    await ws.send_json({"action": "auth", "params": _KEY})
-                    
-                    # Look for debug environment variable to print symbols
-                    if os.environ.get("OA_DEBUG"):
-                        print(f"[trade_feed] Symbols to subscribe [{len(symbols)}]: {symbols[:5]}...")
-                    
-                    # 2) subscribe to trades in ≤100-symbol chunks
-                    CHUNK = 100  # max tickers per message
-                    for i in range(0, len(symbols), CHUNK):
-                        batch = [f"T.{sym}" for sym in symbols[i:i+CHUNK]]
-                        
-                        print(f"[trade_feed] Subscribing to chunk {i//CHUNK + 1}/{(len(symbols)-1)//CHUNK + 1} with {len(batch)} symbols")
-                        
-                        # Send subscription message
-                        await ws.send_json({"action": "subscribe",
-                                           "params": ",".join(batch)})   # Polygon wants a string
-                        print(f"[trade_feed] Subscription request sent")
-                        
-                        # Add a small delay between subscription batches
-                        await asyncio.sleep(0.5)
-                    
-                    # FALLBACK: Subscribe to all option trades and quotes as a wildcard
-                    print("[trade_feed] Adding wildcard subscription for all option trades and quotes")
-                    channel_list = ["T.*", "Q.*"]   # trades + NBBO quotes
-                    wildcard_sub = {"action": "subscribe", "params": ",".join(channel_list)}   # Polygon wants a string
-                    await ws.send_json(wildcard_sub)
-                    print("[trade_feed] All option trades and quotes wildcard subscription sent")
-                    
-                    # Reset backoff after successful connection
-                    backoff = 1
-                    
-                    # Process messages
-                    async for msg in ws:
-                        if msg.type is aiohttp.WSMsgType.TEXT:
-                            data = json.loads(msg.data)
-                            
-                            # Enhanced debugging - print all message types with more details
-                            if isinstance(data, dict):
-                                print(f"[trade_feed] Received dict message: {data.keys()}")
-                                # Print the entire dict for debugging
-                                print(f"[trade_feed] FULL DICT: {json.dumps(data)}")
-                            elif isinstance(data, list) and data:
-                                if len(data) > 0:
-                                    key_info = data[0].keys() if isinstance(data[0], dict) and data[0] else 'empty'
-                                    print(f"[trade_feed] Received list message [{len(data)} items]: {key_info}")
-                                    
-                                    # Print the first item in full for debugging
-                                    if isinstance(data[0], dict):
-                                        print(f"[trade_feed] SAMPLE LIST ITEM: {json.dumps(data[0])}")
-                                else:
-                                    print(f"[trade_feed] Received empty list message")
-                            else:
-                                print(f"[trade_feed] Received unknown message type: {type(data)}")
-                                print(f"[trade_feed] RAW DATA: {data}")
-                            
-                            # Check if it's a trade message (list of trades)
-                            if isinstance(data, list) and data:
-                                ev = data[0].get("ev")
-                                
-                                # Trade frames:  {"ev":"T", "sym": ... }
-                                if ev == "T":  # Trade
-                                    print(f"[trade_feed] Processing {len(data)} trade messages")
-                                    for trade in data:
-                                        # Only process valid trade messages
-                                        if trade.get('ev') == 'T' and trade.get('sym') and trade.get('p') and trade.get('s'):
-                                            await handle_trade(trade)
-                                # Quote frames: {"ev":"Q", "sym": ... }
-                                elif ev == "Q":  # Quote
-                                    print(f"[trade_feed] Processing {len(data)} quote messages")
-                                    for quote in data:
-                                        if quote.get('ev') == 'Q' and quote.get('sym') and 'bp' in quote and 'ap' in quote:
-                                            symbol = quote.get('sym')
-                                            quotes[symbol] = (quote.get('bp', 0), quote.get('ap', 0), quote.get('t', 0))
-                                            print(f"[trade_feed] Updated NBBO for {symbol}: {quote.get('bp')} x {quote.get('ap')}")
-                                
-                                # Handle status messages in list format
-                                elif 'status' in data[0]:
-                                    print(f"[trade_feed] Status in list: {data[0].get('status')} - {data[0].get('message', '')}")
-                            # Handle connection status messages for debugging
-                            elif isinstance(data, dict) and 'status' in data:
-                                print(f"[trade_feed] Status: {data.get('status')} - {data.get('message', '')}")
-                        elif msg.type == aiohttp.WSMsgType.ERROR:
-                            print(f"[trade_feed] WebSocket error: {ws.exception()}")
-                            raise ws.exception()
-                        elif msg.type == aiohttp.WSMsgType.CLOSED:
-                            print("[trade_feed] Connection closed")
-                            break
-        except asyncio.CancelledError:
-            # Allow clean task cancellation
+            run_once()          # reconnect-forever loop
+        except KeyboardInterrupt:
             raise
         except Exception as exc:
-            # Implement exponential backoff
-            print(f"[trade_feed] {type(exc).__name__}: {exc}; reconnecting in {backoff}s...")
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)  # Exponential backoff with ceiling
+            _LOG.error("WS crashed: %s — reconnecting in 3 s", exc)
+            time.sleep(3)
