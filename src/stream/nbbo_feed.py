@@ -3,6 +3,7 @@ import os, json, logging, threading, time
 from datetime import datetime, timezone
 from .polygon_client import make_ws
 from .quote_cache      import quote_cache
+from .sinks import quote_sink                  # save quotes to parquet
 
 PING_INTERVAL = 4            # seconds  (<5 s keeps Polygon happy)
 _POLY_TO_GENERIC = {        # bp/bp → bid/ask   (added earlier)
@@ -89,12 +90,22 @@ def _run_ws():
                     ask_size = msg["as"],          # <-- as
                     ts       = msg["t"],
                 )
+                # Format timestamp for logging
+                ts_str = datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc).strftime("%H:%M:%S.%f")[:-3]
                 _LOG.debug(
                     "Quote %-22s %7.2f × %7.2f  %s",
-                    msg["sym"], msg["bp"], msg["ap"],
-                    datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)
-                            .strftime("%H:%M:%S.%f")[:-3],
+                    msg["sym"], msg["bp"], msg["ap"], ts_str
                 )
+                
+                # Save to parquet using the sink
+                snapshot_ts = datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)
+                quote_sink.append({
+                    "ts": snapshot_ts,
+                    "symbol": msg["sym"],
+                    "bid": msg["bp"],
+                    "ask": msg["ap"],
+                    "mid": (msg["bp"] + msg["ap"]) / 2,
+                })
         except json.JSONDecodeError:
             _LOG.debug("non-JSON frame: %r", raw)
         except Exception:

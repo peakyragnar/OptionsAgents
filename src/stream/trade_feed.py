@@ -11,6 +11,7 @@ import os, json, logging, time, threading, websocket
 from datetime     import datetime, timezone
 from .polygon_client import make_ws            # you already have this
 from .quote_cache      import quote_cache      # filled by nbbo_feed.py
+from .sinks import trade_sink                  # save trades to parquet
 
 _LOG = logging.getLogger("trade_feed")
 WS_URL       = "wss://socket.polygon.io/options"
@@ -62,6 +63,16 @@ def run_once():
 
                 print(f"{ts}  {side:4s}  {msg['sym']:22s} "
                       f"{msg['p']:8.2f}  x{msg['s']}")
+                
+                # Save to parquet using the sink
+                snapshot_ts = datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)
+                trade_sink.append({
+                    "ts": snapshot_ts,
+                    "symbol": msg["sym"],
+                    "price": msg["p"],
+                    "size": msg["s"],
+                    "side": side,            # "BUY", "SELL", or "?"
+                })
         except Exception:
             _LOG.exception("bad trade msg")
 
