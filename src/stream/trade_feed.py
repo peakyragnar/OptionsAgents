@@ -33,7 +33,9 @@ def run_once():
         raise RuntimeError("export TRADE_SUB='O:SPXWYYMMDDC05500000' (one OCC ticker)")
 
     ws = make_ws(WS_URL)
-    ws.send(json.dumps({"action":"subscribe", "params": f"T.{sym}"}))
+    # prepend the trade-channel prefix that Polygon now requires
+    trade_chan = sym if sym.startswith("T.") else f"T.{sym}"
+    ws.send(json.dumps({"action":"subscribe", "params": trade_chan}))
 
     # keep-alive pings (Polygon kills idle sockets ~60 s)
     def _ping(ws):
