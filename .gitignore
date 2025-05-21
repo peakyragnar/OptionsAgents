@@ -12,6 +12,10 @@ __pycache__/
 # virtual environment
 .venv/
 
+# ── runtime artifacts ─────────────────────────────
+data/
+*.log
+
 
 
 
