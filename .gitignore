@@ -19,3 +19,8 @@ data/
 
 
 
+
+# local logs & mac launchd
+logs/
+*.plist
+~/

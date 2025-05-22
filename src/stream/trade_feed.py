@@ -7,11 +7,12 @@ Proof-of-concept trade feed.
 Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_feed --debug
 """
 
-import os, json, logging, time, threading, websocket
+import os, json, logging, time, threading, websocket, zoneinfo
 from datetime     import datetime, timezone
-from websocket import WebSocketTimeoutException
-from .polygon_client import make_ws            # you already have this
-from .quote_cache      import quote_cache      # filled by nbbo_feed.py
+from websocket    import WebSocketTimeoutException
+from .polygon_client import make_ws
+from .quote_cache    import quote_cache
+from src.polygon_helpers import fetch_spx_chain
 
 _LOG = logging.getLogger("trade_feed")
 WS_URL       = "wss://socket.polygon.io/options"
@@ -29,14 +30,13 @@ def _infer_side(trd: dict, q: dict | None) -> str:
     return "?"
 
 def run_once():
-    sym  = os.getenv("TRADE_SUB")
-    if not sym:
-        raise RuntimeError("export TRADE_SUB='O:SPXWYYMMDDC05500000' (one OCC ticker)")
+    today = datetime.now(zoneinfo.ZoneInfo("US/Eastern")).strftime("%Y-%m-%d")
+    tickers = fetch_spx_chain(today)          # ~400-600 tickers
+    params   = ",".join(tickers)
 
     ws = make_ws(WS_URL)
-    # prepend the trade-channel prefix that Polygon now requires
-    trade_chan = sym if sym.startswith("T.") else f"T.{sym}"
-    ws.send(json.dumps({"action":"subscribe", "params": trade_chan}))
+    ws.send(json.dumps({"action":"subscribe", "params": params}))
+    _LOG.info("listening for trades on %d tickers …", len(tickers))
     
     # Set longer timeouts for stability
     ws.settimeout(20)
@@ -59,8 +59,6 @@ def run_once():
                 logging.debug("ping thread exit: %s", e)
                 return
     threading.Thread(target=_ping, args=(ws,), daemon=True).start()
-
-    _LOG.info("listening for trades on %s …", sym)
     
     # Hand-rolled loop lets us swallow timeouts
     while True:
