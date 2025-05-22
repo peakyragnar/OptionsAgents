@@ -120,3 +120,5 @@ if __name__ == "__main__":
         except Exception as exc:
             _LOG.error("WS crashed: %s — reconnecting in 3 s", exc)
             time.sleep(3)
+# test helper
+run = run_once
