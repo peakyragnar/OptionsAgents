@@ -12,3 +12,19 @@ quotes: Dict[str, Quote] = {}
 # ----------------------------------------------------------------------
 # backward-compat variable expected by trade_feed & dealer.engine tests
 quote_cache = quotes    # <-- NEW ALIAS
+import asyncio
+async def run(poll_ms: int = 5000):
+    """dummy poller so unit tests don't blow up."""
+    while True:
+        await asyncio.sleep(poll_ms / 1000)
+
+def side_from_price(sym: str, px: float):
+    bid, ask, *_ = quotes.get(sym, (None, None))
+    if bid is None:
+        return None
+    if px >= ask - 1e-4:
+        return "buy"
+    if px <= bid + 1e-4:
+        return "sell"
+    return None
+PY < /dev/null

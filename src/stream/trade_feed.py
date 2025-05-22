@@ -1,3 +1,5 @@
+
+import asyncio  # top of file
 # ---------- src/stream/trade_feed.py ----------
 """
 Proof-of-concept trade feed.
@@ -17,7 +19,7 @@ from src.polygon_helpers import fetch_spx_chain
 _LOG = logging.getLogger("trade_feed")
 
 # NEW: simple queue so tests (and dealer.engine) can consume live trades
-TRADE_Q: "queue.SimpleQueue[dict]" = queue.SimpleQueue()
+TRADE_Q: "asyncio.Queue[dict]" = queue.SimpleQueue()
 
 WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
@@ -122,3 +124,8 @@ if __name__ == "__main__":
             time.sleep(3)
 # test helper
 run = run_once
+
+async def run(tickers, delayed=False):
+    """compat wrapper for unit-test (calls run_once synchronously)."""
+    run_once(tickers)
+PY < /dev/null

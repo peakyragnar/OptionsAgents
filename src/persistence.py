@@ -75,4 +75,5 @@ def get_gamma_history(limit=100):
         # Convert ts to readable time
         df['time'] = df['ts'].apply(lambda x: dt.datetime.fromtimestamp(x).strftime('%Y-%m-%d %H:%M:%S'))
     
-    return df
+    return dfimport os, duckdb; p = os.getenv("OA_GAMMA_DB"); \
+      duckdb.connect(p).close() if p else None
