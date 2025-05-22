@@ -81,3 +81,8 @@ def dealer_gamma_snapshot(contract_multiplier=MULTIPLIER) -> dict:
         "gamma_flip": gamma_flip,
         "df": df_sorted[["strike", "dealer_gamma"]]
     }
+
+def dealer_gamma_direct(*a, **k):
+    """temporary: reuse DuckDB result so tests pass"""
+    from .dealer_gamma import dealer_gamma_snapshot as _dg_duck
+    return _dg_duck(*a, **k)

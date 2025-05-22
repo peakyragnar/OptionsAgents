@@ -19,6 +19,34 @@ client = RESTClient(os.getenv("POLYGON_KEY"))
 def _nan_if_none(x):
     return float("nan") if x is None else float(x)
 
+# ---------------------------------------------------------------------------
+# Fast vectorised Black–Scholes DELTA (works with numpy / pandas Series)
+# ---------------------------------------------------------------------------
+import numpy as np
+from scipy.stats import norm as _N  # already a dependency via bs_gamma
+
+def _bs_delta(opt_type, S, K, T, sigma, r=0.0):
+    """
+    Vectorised delta.
+      opt_type : array-like of 'C' or 'P' (case-insensitive)
+      S, K, T, sigma, r : array-like or scalars (broadcast OK)
+    Returns a NumPy array (same length as S).
+    """
+    # to ndarray for fast math
+    opt_type = np.char.upper(np.asarray(opt_type, str))
+    S, K, T, sigma, r = map(np.asarray, (S, K, T, sigma, r))
+
+    # guard against div-by-zero or negative T/sigma
+    T     = np.clip(T,     1e-10, None)
+    sigma = np.clip(sigma, 1e-10, None)
+
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    cdf = _N.cdf(d1)
+
+    # call:  Δ =  N(d1)
+    # put :  Δ =  N(d1) − 1
+    return np.where(opt_type == "C", cdf, cdf - 1.0)
+
 def fetch_chain() -> pd.DataFrame:
     today = datetime.date.today().isoformat()
 
@@ -198,7 +226,20 @@ def fetch_chain() -> pd.DataFrame:
                 "under_px": under_px
             })
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    
+    # --- fill missing delta with vectorized calculation --------------------------------------------------
+    T_days = 1/365.0                                                    # 0-DTE ≈ 1 day
+    df["delta"] = _bs_delta(
+        df["type"],               # 'C' / 'P'
+        df["under_px"],           # S
+        df["strike"],             # K
+        T_days,                   # T in years
+        df["iv"].fillna(0.25),    # sigma (vol) - fall back to 25% if IV blank
+        0.0                       # risk-free rate
+    )
+    
+    return df
 
 # ---- file-writer with explicit data type handling ----
 def write_parquet(df: pd.DataFrame):

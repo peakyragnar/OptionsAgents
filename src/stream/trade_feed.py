@@ -1,5 +1,4 @@
 
-import asyncio  # top of file
 # ---------- src/stream/trade_feed.py ----------
 """
 Proof-of-concept trade feed.
@@ -9,7 +8,7 @@ Proof-of-concept trade feed.
 Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_feed --debug
 """
 
-import os, json, logging, time, threading, websocket, zoneinfo, queue   # ← add "queue"
+import os, json, logging, time, threading, websocket, zoneinfo, asyncio
 from datetime     import datetime, timezone
 from websocket    import WebSocketTimeoutException
 from .polygon_client import make_ws
@@ -17,10 +16,6 @@ from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
 
 _LOG = logging.getLogger("trade_feed")
-
-# NEW: simple queue so tests (and dealer.engine) can consume live trades
-TRADE_Q: "asyncio.Queue[dict]" = queue.SimpleQueue()
-
 WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
 
@@ -35,14 +30,18 @@ def _infer_side(trd: dict, q: dict | None) -> str:
         return "SELL"
     return "?"
 
-def run_once():
-    today = datetime.now(zoneinfo.ZoneInfo("US/Eastern")).strftime("%Y-%m-%d")
-    tickers = fetch_spx_chain(today)          # ~400-600 tickers
-    params   = ",".join(tickers)
+def _run_once(tickers: list[str] | None = None):
+    if tickers:                   # unit-test path
+        syms = tickers
+    else:                        # normal path
+        today = datetime.now(zoneinfo.ZoneInfo("US/Eastern")).strftime("%Y-%m-%d")
+        syms = fetch_spx_chain(today)          # ~400-600 tickers
+    
+    params = ",".join(syms)
 
     ws = make_ws(WS_URL)
     ws.send(json.dumps({"action":"subscribe", "params": params}))
-    _LOG.info("listening for trades on %d tickers …", len(tickers))
+    _LOG.info("listening for trades on %d tickers …", len(syms))
     
     # Set longer timeouts for stability
     ws.settimeout(20)
@@ -116,16 +115,28 @@ if __name__ == "__main__":
     )
     while True:
         try:
-            run_once()          # reconnect-forever loop
+            _run_once()          # reconnect-forever loop
         except KeyboardInterrupt:
             raise
         except Exception as exc:
             _LOG.error("WS crashed: %s — reconnecting in 3 s", exc)
             time.sleep(3)
-# test helper
-run = run_once
+# --------------------------------------------------------------------------- #
+# compatibility helpers for unit-tests
 
-async def run(tickers, delayed=False):
-    """compat wrapper for unit-test (calls run_once synchronously)."""
-    run_once(tickers)
-PY < /dev/null
+# switch to async queue so dealer.engine can await it
+TRADE_Q: "asyncio.Queue[dict]" = asyncio.Queue()
+
+# ---------------------------------------------------------------- #
+# Back-compat wrapper used by tests
+async def run(tickers: list[str], delayed: bool = False):
+    """
+    Wrapper expected by tests:
+      • accepts ticker list
+      • runs synchronously for now
+    """
+    _run_once(tickers)
+
+# Expose run_once for backward compatibility
+def run_once():
+    _run_once()
