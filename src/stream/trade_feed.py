@@ -7,7 +7,7 @@ Proof-of-concept trade feed.
 Run:  TRADE_SUB='O:SPXW250521C05930000' PYTHONPATH=. python -m src.stream.trade_feed --debug
 """
 
-import os, json, logging, time, threading, websocket, zoneinfo
+import os, json, logging, time, threading, websocket, zoneinfo, queue   # ← add "queue"
 from datetime     import datetime, timezone
 from websocket    import WebSocketTimeoutException
 from .polygon_client import make_ws
@@ -15,6 +15,10 @@ from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
 
 _LOG = logging.getLogger("trade_feed")
+
+# NEW: simple queue so tests (and dealer.engine) can consume live trades
+TRADE_Q: "queue.SimpleQueue[dict]" = queue.SimpleQueue()
+
 WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
 
@@ -81,6 +85,15 @@ def run_once():
 
                 print(f"{ts}  {side:4s}  {msg['sym']:22s} "
                       f"{msg['p']:8.2f}  x{msg['s']}")
+
+                # NEW: push the trade into the queue
+                TRADE_Q.put({
+                    "ts": ts,
+                    "side": side,
+                    "sym": msg["sym"],
+                    "price": msg["p"],
+                    "size": msg["s"],
+                })
                       
         except WebSocketTimeoutException:
             # Normal timeout - just continue waiting
