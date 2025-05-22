@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optionsagents"
+version = "0.1.0"
+dependencies = [
+    "duckdb",
+    "pyarrow",
+    "polars",
+    "typer",
+    # add the rest of requirements.txt here or keep requirements.txt as-is
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

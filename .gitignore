@@ -24,3 +24,8 @@ data/
 logs/
 *.plist
 ~/
+
+# build artifacts
+src/*.egg-info/
+# local DB files
+data/*.db
