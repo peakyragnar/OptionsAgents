@@ -241,24 +241,31 @@ def fetch_chain() -> pd.DataFrame:
     
     return df
 
-# ---- file-writer with explicit data type handling ----
-def write_parquet(df: pd.DataFrame):
-    ts   = datetime.datetime.now()
-    path = pathlib.Path("data/parquet/spx") / f"date={ts.date()}" / f"{ts:%H_%M_%S}.parquet"
-    
-    # ------------------------------------------------------------------
+
+def path_for_now():
+    ts = datetime.datetime.now()
+    return pathlib.Path("data/parquet/spx") / f"date={ts.date()}" / f"{ts:%H_%M_%S}.parquet"
+
+def write_parquet_atomic(df: pd.DataFrame, path: pathlib.Path):
     # Force 64-bit floats for columns that can hold very small numbers.
     for col in ("iv", "delta", "gamma", "vega", "theta"):
         df[col] = df[col].astype("float64")
-    # ------------------------------------------------------------------
     
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, compression="zstd")
     return path
 
+def read_latest_chain(symbol="SPX"):
+    return fetch_chain()
+
+def main(symbol="SPX"):
+    tbl = read_latest_chain(symbol)  # pull current order book
+    write_parquet_atomic(tbl, path_for_now())
+    print(f"Wrote {len(tbl)} rows → {path_for_now()}")
+
 if __name__ == "__main__":
-    df = fetch_chain()
-    if df.empty:
-        raise SystemExit("Polygon returned zero rows")
-    p = write_parquet(df)
-    print(f"Wrote {len(df)} rows → {p}")
+    import argparse
+    parser = argparse.ArgumentParser(description="Pull one snapshot of option chain")
+    parser.add_argument("--symbol", default="SPX", help="Symbol to snapshot (default: SPX)")
+    args = parser.parse_args()
+    main(args.symbol)
