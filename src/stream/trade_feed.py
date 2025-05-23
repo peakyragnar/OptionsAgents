@@ -263,7 +263,14 @@ def _run_once(tickers: list[str] | None = None):
                     # Update pin detector with real-time trade
                     if PIN_DETECTOR:
                         try:
-                            PIN_DETECTOR.process_trade(msg)
+                            # Convert to format pin detector expects
+                            trade_data = {
+                                'symbol': msg.get('sym'),
+                                'price': msg.get('p'),
+                                'size': msg.get('s'),
+                                'timestamp': msg.get('t')
+                            }
+                            PIN_DETECTOR.process_trade(trade_data)
                         except Exception as e:
                             _LOG.debug(f"Pin detector error: {e}")
                     
