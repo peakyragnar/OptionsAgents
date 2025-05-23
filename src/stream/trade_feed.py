@@ -13,69 +13,6 @@ from .polygon_client import make_ws
 from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
 
-# Add this after the import statements (around line 8)
-
-def debug_websocket_message(raw_message):
-    """Debug function to see all WebSocket messages"""
-    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    
-    try:
-        if isinstance(raw_message, str):
-            print(f"🔍 {timestamp} | RAW STRING: {raw_message}")
-            data = json.loads(raw_message)
-        elif isinstance(raw_message, list):
-            print(f"🔍 {timestamp} | BATCH OF {len(raw_message)} MESSAGES")
-            for i, msg in enumerate(raw_message):
-                print(f"🔍 Message {i+1}/{len(raw_message)}:")
-                debug_single_message(msg, timestamp)
-            return
-        else:
-            data = raw_message
-            debug_single_message(data, timestamp)
-            return
-            
-        # Handle parsed JSON (should be a list)
-        if isinstance(data, list):
-            print(f"🔍 {timestamp} | PARSED LIST OF {len(data)} MESSAGES")
-            for i, msg in enumerate(data):
-                print(f"🔍 Message {i+1}/{len(data)}:")
-                debug_single_message(msg, timestamp)
-        else:
-            debug_single_message(data, timestamp)
-            
-    except Exception as e:
-        print(f"🔍 {timestamp} | DEBUG ERROR: {e}")
-        print(f"🔍 RAW: {str(raw_message)[:200]}...")
-
-def debug_single_message(data, timestamp):
-    """Debug a single message"""
-    try:
-        event_type = data.get('ev', 'unknown')
-        symbol = data.get('sym', 'unknown')
-        
-        if event_type == 'status':
-            status = data.get('status', 'unknown')
-            message = data.get('message', '')
-            print(f"   STATUS: {status} - {message}")
-            
-            if 'subscribed to' in message:
-                print(f"   ✅ SUBSCRIPTION CONFIRMED: {message}")
-            elif status == 'auth_success':
-                print(f"   ✅ AUTHENTICATED - Should see subscriptions next...")
-                
-        elif event_type == 'T':  # Trade
-            price = data.get('p', 0)
-            size = data.get('s', 0)
-            print(f"   🚀🚀🚀 TRADE: {symbol} @ ${price} x{size} 🚀🚀🚀")
-            
-        elif event_type in ['AM', 'V', 'A']:  # Aggregates/Values
-            print(f"   📈 {event_type}: {symbol}")
-            
-        else:
-            print(f"   🔍 {event_type}: {symbol} - {data}")
-            
-    except Exception as e:
-        print(f"   DEBUG ERROR: {e}")
 
 _LOG = logging.getLogger("trade_feed")
 WS_URL       = "wss://socket.polygon.io/options"
@@ -85,6 +22,7 @@ PING_SECONDS = 25
 CURRENT_SPX_LEVEL = 5850.0
 LAST_SPX_UPDATE = None
 PIN_DETECTOR = None
+_last_pin_report = 0  # Track last pin status report time
 
 def initialize_pin_detector():
     """Initialize the pin detector for real-time updates"""
@@ -298,46 +236,19 @@ def _run_once(tickers: list[str] | None = None):
     while True:
         try:
             # Use recv directly instead of for-loop iteration
-            print("🔍 WAITING FOR MESSAGE...")
-            ws.settimeout(10)  # 10 second timeout
-            try:
-                raw = ws.recv()
-                print(f"🔍 RECEIVED MESSAGE AFTER WAIT: {raw}")
-            except websocket.WebSocketTimeoutException:
-                print("⏰ TIMEOUT: No message received in 10 seconds")
-                print("🔍 This suggests Polygon isn't sending subscription confirmations")
-                continue
+            raw = ws.recv()
             
             # Skip empty frames or heartbeats
             if not raw or raw == "heartbeat":
-                print("🔍 SKIPPING EMPTY/HEARTBEAT MESSAGE")
                 continue
                 
-            print("🔍 PROCESSING NON-EMPTY MESSAGE")
-            # Process the message
-            debug_websocket_message(raw)
-            print(f"🔍 ABOUT TO PARSE JSON: {raw}")
-            parsed_msgs = json.loads(raw)
-            print(f"🔍 PROCESSING {len(parsed_msgs)} PARSED MESSAGES")
-
-            for i, msg in enumerate(parsed_msgs):
-                print(f"🔍 Processing message {i+1}: {msg}")
+            # Process the message  
+            for msg in json.loads(raw):
                 
                 # Handle authentication success - subscribe after auth
                 if msg.get("ev") == "status" and msg.get("status") == "auth_success":
-                    print("🚀 Authentication successful! Subscribing to symbols...")
-                    params = ",".join(syms)
-                    subscription_msg = {"action": "subscribe", "params": params}
-                    
-                    print(f"🔍 SUBSCRIPTION DEBUG:")
-                    print(f"   📊 Total symbols: {len(syms)}")
-                    print(f"   📝 First 5 symbols: {syms[:5]}")
-                    print(f"   📄 Params length: {len(params)} characters")
-                    print(f"   🎯 Subscription message: {subscription_msg}")
-                    
-                    ws.send(json.dumps(subscription_msg))
-                    print(f"📡 ✅ SUBSCRIPTION SENT - waiting for confirmations...")
-                    _LOG.info("Subscribed to %d tickers after authentication", len(syms))
+                    # Authentication successful - subscription handled in polygon_client.py
+                    _LOG.info("Authentication successful")
                     continue
                 
                 # Handle SPX index updates
@@ -349,6 +260,13 @@ def _run_once(tickers: list[str] | None = None):
                 if msg.get("ev") == "T":              # Trade event
                     process_options_trade(msg)
                     
+                    # Update pin detector with real-time trade
+                    if PIN_DETECTOR:
+                        try:
+                            PIN_DETECTOR.process_trade(msg)
+                        except Exception as e:
+                            _LOG.debug(f"Pin detector error: {e}")
+                    
                 # Handle other message types if needed
                 elif msg.get("ev") in ["AM", "V", "A"] and msg.get("sym") == "I:SPX":
                     # Additional SPX message formats
@@ -356,6 +274,12 @@ def _run_once(tickers: list[str] | None = None):
                       
         except WebSocketTimeoutException:
             # Normal timeout - just continue waiting
+            # Print pin status every few minutes
+            global _last_pin_report
+            current_time = time.time()
+            if current_time - _last_pin_report > 120:  # Every 2 minutes
+                print_pin_status()
+                _last_pin_report = current_time
             continue
         except Exception:
             _LOG.exception("bad message processing")
