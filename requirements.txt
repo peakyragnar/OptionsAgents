@@ -13,4 +13,4 @@ plotly>=5.15.0
 zstandard>=0.21.0
 aiohttp>=3.9.0
 typer>=0.9.0
-rich>=13.7.0        # Typer pretty help output
+rich>=13.7.0        # Typer pretty help outputpsutil>=5.9.0

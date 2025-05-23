@@ -1,7 +1,6 @@
 import asyncio, typer, pathlib
 from dotenv import load_dotenv
 load_dotenv()                    # ← must be before `import stream.quote_cache` etc.
-
 from src.stream.quote_cache import run as quotes_run
 from src.stream.trade_feed  import run as trades_run, TRADE_Q
 from src.dealer.engine      import run as engine_run
@@ -27,25 +26,108 @@ def live():
     
     if not symbols:
         print("Warning: No symbols loaded. Make sure the snapshot file exists.")
-        print("Using test symbols instead...")
-        # Add a few test symbols if no real ones are found
-        symbols = [
-            "O:SPX240520C04800000",
-            "O:SPX240520P04800000",
-            "O:SPX240520C04900000",
-            "O:SPX240520P04900000",
-            "O:SPX240520C05000000",
-            "O:SPX240520P05000000",
-        ]
+        print("Checking latest parquet files...")
+        
+        # Try to load from latest parquet snapshot
+        from datetime import datetime
+        from pathlib import Path
+        import glob
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        snapshot_dir = Path("data/parquet/spx") / f"date={today}"
+        
+        if snapshot_dir.exists():
+            pattern = str(snapshot_dir / "*.parquet")
+            files = glob.glob(pattern)
+            
+            if files:
+                latest_file = max(files, key=os.path.getctime)
+                print(f"Loading symbols from: {latest_file}")
+                
+                try:
+                    import pandas as pd
+                    df = pd.read_parquet(latest_file)
+                    
+                    # Extract symbols from snapshot
+                    if 'symbol' in df.columns:
+                        symbols = df['symbol'].tolist()
+                        print(f"Loaded {len(symbols)} symbols from snapshot")
+                    else:
+                        print("No 'symbol' column found in snapshot")
+                        symbols = []
+                        
+                except Exception as e:
+                    print(f"Error loading snapshot: {e}")
+                    symbols = []
+        
+        if not symbols:
+            print("❌ No symbols found! Cannot run live mode without options symbols.")
+            print("Make sure you have recent snapshot data in data/parquet/spx/")
+            return
+    
+    # ADD SPX INDEX TO SYMBOL LIST FOR REAL-TIME PRICING
+    if "I:SPX" not in symbols:
+        symbols.append("I:SPX")
+        print(f"✅ Added SPX index (I:SPX) to symbol list")
     
     print(f"Starting live mode with {len(symbols)} symbols")
-
+    print(f"Options symbols: {len([s for s in symbols if s.startswith('O:')])} options")
+    print(f"Index symbols: {len([s for s in symbols if s.startswith('I:')])} indices")
+    
     async def main():
+        # Initialize pin detector if available
+        try:
+            from src.dealer.pin_detector import ZeroDTEPinDetector
+            pin_detector = ZeroDTEPinDetector()
+            print("✅ Pin detector initialized")
+            
+            # Load gamma surface from latest snapshot
+            try:
+                from datetime import datetime
+                import pandas as pd
+                import glob
+                
+                today = datetime.now().strftime("%Y-%m-%d")
+                snapshot_dir = pathlib.Path("data/parquet/spx") / f"date={today}"
+                
+                if snapshot_dir.exists():
+                    pattern = str(snapshot_dir / "*.parquet")
+                    files = glob.glob(pattern)
+                    
+                    if files:
+                        latest_file = max(files, key=os.path.getctime)
+                        df = pd.read_parquet(latest_file)
+                        
+                        # Convert to options chain format
+                        options_chain = []
+                        for _, row in df.iterrows():
+                            option_data = {
+                                'symbol': row.get('symbol', ''),
+                                'strike': row.get('strike', 0),
+                                'option_type': row.get('option_type', 'C'),
+                                'gamma': row.get('gamma', 0),
+                                'bid': row.get('bid', 0),
+                                'ask': row.get('ask', 0)
+                            }
+                            options_chain.append(option_data)
+                        
+                        pin_detector.update_gamma_surface(options_chain)
+                        print(f"✅ Pin detector gamma surface updated with {len(options_chain)} options")
+                        
+            except Exception as e:
+                print(f"⚠️  Could not initialize pin detector gamma surface: {e}")
+            
+        except ImportError:
+            print("⚠️  Pin detector not available - running without pin detection")
+            pin_detector = None
+        
+        # Run the main streaming components
         await asyncio.gather(
             quotes_run(),
             trades_run(symbols),
             engine_run(append_gamma),
         )
+    
     asyncio.run(main())
 
 @app.command()
