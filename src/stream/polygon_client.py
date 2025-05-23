@@ -20,7 +20,7 @@ async def fetch_quote(sess: aiohttp.ClientSession, occ_ticker: str):
 
 
 # --------------------------------------------------------------------------- #
-def make_ws(url: str):
+def make_ws(url: str, symbols: list[str] = None):
     ws = websocket.create_connection(url, ping_interval=30)
 
     # 1️⃣  initial "connected" frame ----------------------------------------
@@ -46,4 +46,15 @@ def make_ws(url: str):
     if frame.get("status") != "auth_success":
         raise RuntimeError(f"Polygon WS auth failed: {frame}")
 
+    # 4️⃣  Subscribe to symbols immediately after auth ------------------
+    if symbols:
+        print(f"🚀 Subscribing to {len(symbols)} symbols after authentication...")
+        # Add T. prefix for options WebSocket
+        symbols_with_prefix = [f"T.{sym}" for sym in symbols]
+        params = ",".join(symbols_with_prefix)
+        subscription_msg = {"action": "subscribe", "params": params}
+        print(f"📡 Using T. prefix for subscription")
+        ws.send(json.dumps(subscription_msg))
+        print(f"📡 ✅ SUBSCRIPTION SENT for {len(symbols)} symbols")
+        
     return ws
