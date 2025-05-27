@@ -8,7 +8,7 @@ Enhanced trade feed with SPX index support.
 
 import os, json, logging, time, threading, websocket, zoneinfo, asyncio
 from datetime     import datetime, timezone
-from websocket    import WebSocketTimeoutException
+from websocket    import WebSocketTimeoutException, WebSocketConnectionClosedException
 from .polygon_client import make_ws
 from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
@@ -28,66 +28,52 @@ WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
 
 # Add this function to get SPX level from your existing quote cache
-def get_current_spx_from_quotes():
-    """Get current SPX level from your existing quote cache"""
+def debug_spx_detection():
+    """Debug what SPX data is available"""
     try:
-        # Try different SPX symbol formats that your system might use
-        spx_symbols = ['I:SPX', 'SPX', '$SPX', 'SPXW']
+        print("🔍 DEBUGGING SPX DETECTION:")
+        print(f"  Total symbols in quotes: {len(quote_cache)}")
         
-        for symbol in spx_symbols:
+        # Look for anything containing SPX
+        spx_like = [symbol for symbol in quote_cache.keys() if 'SPX' in symbol.upper()]
+        print(f"  SPX-like symbols: {spx_like[:10]}")  # First 10 to avoid spam
+        
+        # Check specific SPX index symbols
+        index_symbols = ['I:SPX', 'SPX', '$SPX', 'SPXW']
+        for symbol in index_symbols:
             if symbol in quote_cache:
                 q = quote_cache.get(symbol)
                 if q and 'bid' in q and 'ask' in q:
                     bid = q['bid']
                     ask = q['ask']
-                    if bid > 0 and ask > 0:
-                        spx_level = (bid + ask) / 2
-                        print(f"🔍 SPX from quotes ({symbol}): {spx_level:.2f}")
-                        return spx_level
-                    
+                    print(f"  {symbol}: bid={bid}, ask={ask}, mid={(bid+ask)/2:.2f}")
+                else:
+                    print(f"  {symbol}: found but no bid/ask")
+        
+        # Sample some option symbols
+        option_count = sum(1 for s in quote_cache.keys() if s.startswith('O:SPX'))
+        print(f"  Total SPX options in cache: {option_count}")
+        
     except Exception as e:
-        print(f"⚠️  Error getting SPX from quotes: {e}")
-    
-    # Fallback: try to get from Polygon API
-    return get_spx_from_polygon()
+        print(f"❌ Debug error: {e}")
+
+def get_current_spx_from_quotes():
+    """Use the SPX level from your system snapshot instead of API calls"""
+    # Your system already gets SPX from snapshot
+    # Use the CURRENT_SPX_LEVEL which is updated from your snapshots
+    if CURRENT_SPX_LEVEL > 5800:
+        return CURRENT_SPX_LEVEL
+    else:
+        # Fallback to a reasonable default based on your snapshot
+        return 5906.52  # Your recent snapshot SPX level
 
 def get_spx_from_polygon():
-    """Fallback to get SPX from Polygon API"""
-    try:
-        import requests
-        
-        api_key = os.getenv('POLYGON_KEY')
-        if not api_key:
-            print("⚠️  No POLYGON_KEY found")
-            return 5900.0  # Default fallback
-            
-        url = f"https://api.polygon.io/v2/last/nbbo/I:SPX"
-        headers = {"Authorization": f"Bearer {api_key}"}
-        
-        response = requests.get(url, headers=headers, timeout=5)
-        data = response.json()
-        
-        if 'results' in data and data['results']:
-            bid = data['results'].get('bid', 0)
-            ask = data['results'].get('ask', 0)
-            if bid > 0 and ask > 0:
-                spx_level = (bid + ask) / 2
-                print(f"🔍 SPX from Polygon API: {spx_level:.2f}")
-                return spx_level
-                
-    except Exception as e:
-        print(f"⚠️  Error fetching SPX from API: {e}")
-    
-    # Final fallback - use global tracking variable
-    if CURRENT_SPX_LEVEL > 0:
-        return CURRENT_SPX_LEVEL
-    
-    # Final fallback
-    print("⚠️  Using default SPX level: 5900.0")
-    return 5900.0
+    """Disabled - use system SPX level instead of API calls"""
+    # Stop making API calls - use your system's SPX level
+    return get_current_spx_from_quotes()
 
 # Global variables for SPX tracking and pin detection
-CURRENT_SPX_LEVEL = 5850.0
+CURRENT_SPX_LEVEL = 5906.52  # Updated from your snapshot
 LAST_SPX_UPDATE = None
 PIN_DETECTOR = None
 _last_pin_report = time.time()  # Track last pin status report time
@@ -350,6 +336,10 @@ def _run_once(tickers: list[str] | None = None):
                     global _enhanced_trade_counter
                     _enhanced_trade_counter += 1
                     
+                    # Debug SPX detection on first trade
+                    if _enhanced_trade_counter == 1:
+                        debug_spx_detection()
+                    
                     # Get current SPX level from multiple sources
                     current_spx = get_current_spx_from_quotes()
                     
@@ -410,8 +400,18 @@ def _run_once(tickers: list[str] | None = None):
                 DIRECTIONAL_PIN_DETECTOR.print_human_dashboard()
                 _last_directional_pin_report = current_time
             continue
-        except Exception:
+        except websocket.WebSocketConnectionClosedException:
+            print("❌ WebSocket connection closed, attempting reconnection...")
+            time.sleep(5)  # Wait before reconnecting
+            return  # Exit and let the outer loop reconnect
+        except json.JSONDecodeError as e:
+            _LOG.error(f"JSON decode error: {e}")
+            continue  # Skip bad messages
+        except Exception as e:
+            print(f"❌ WebSocket error: {e}")
             _LOG.exception("bad message processing")
+            time.sleep(2)
+            return  # Exit and let the outer loop reconnect
 
 # Print pin status periodically
 def print_pin_status():

@@ -61,8 +61,8 @@ class EnhancedPinDetector:
         
         # Configuration
         self.config = {
-            'min_gamma_threshold': 10,
-            'min_volume_threshold': 5,
+            'min_gamma_threshold': 1.0,
+            'min_volume_threshold': 1,
             'acceleration_threshold': 1.5,
         }
         
