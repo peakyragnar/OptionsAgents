@@ -13,11 +13,78 @@ from .polygon_client import make_ws
 from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
 from src.directional_pin_detector import DIRECTIONAL_PIN_DETECTOR
+from src.enhanced_pin_detection import (
+    initialize_enhanced_pin_detector,
+    process_trade_for_pin_detection,
+    should_trigger_analysis,
+    generate_pin_analysis,
+    get_current_spx_level,
+    get_quick_status
+)
 
 
 _LOG = logging.getLogger("trade_feed")
 WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
+
+# Add this function to get SPX level from your existing quote cache
+def get_current_spx_from_quotes():
+    """Get current SPX level from your existing quote cache"""
+    try:
+        # Try different SPX symbol formats that your system might use
+        spx_symbols = ['I:SPX', 'SPX', '$SPX', 'SPXW']
+        
+        for symbol in spx_symbols:
+            if symbol in quote_cache:
+                q = quote_cache.get(symbol)
+                if q and 'bid' in q and 'ask' in q:
+                    bid = q['bid']
+                    ask = q['ask']
+                    if bid > 0 and ask > 0:
+                        spx_level = (bid + ask) / 2
+                        print(f"🔍 SPX from quotes ({symbol}): {spx_level:.2f}")
+                        return spx_level
+                    
+    except Exception as e:
+        print(f"⚠️  Error getting SPX from quotes: {e}")
+    
+    # Fallback: try to get from Polygon API
+    return get_spx_from_polygon()
+
+def get_spx_from_polygon():
+    """Fallback to get SPX from Polygon API"""
+    try:
+        import requests
+        
+        api_key = os.getenv('POLYGON_KEY')
+        if not api_key:
+            print("⚠️  No POLYGON_KEY found")
+            return 5900.0  # Default fallback
+            
+        url = f"https://api.polygon.io/v2/last/nbbo/I:SPX"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        data = response.json()
+        
+        if 'results' in data and data['results']:
+            bid = data['results'].get('bid', 0)
+            ask = data['results'].get('ask', 0)
+            if bid > 0 and ask > 0:
+                spx_level = (bid + ask) / 2
+                print(f"🔍 SPX from Polygon API: {spx_level:.2f}")
+                return spx_level
+                
+    except Exception as e:
+        print(f"⚠️  Error fetching SPX from API: {e}")
+    
+    # Final fallback - use global tracking variable
+    if CURRENT_SPX_LEVEL > 0:
+        return CURRENT_SPX_LEVEL
+    
+    # Final fallback
+    print("⚠️  Using default SPX level: 5900.0")
+    return 5900.0
 
 # Global variables for SPX tracking and pin detection
 CURRENT_SPX_LEVEL = 5850.0
@@ -26,6 +93,7 @@ PIN_DETECTOR = None
 _last_pin_report = time.time()  # Track last pin status report time
 _last_directional_pin_report = time.time()  # Track last directional pin report time
 _trade_counter = 0  # Track number of trades processed
+_enhanced_trade_counter = 0  # Track trades for enhanced pin detector
 
 def initialize_pin_detector():
     """Initialize the pin detector for real-time updates"""
@@ -123,6 +191,23 @@ def process_options_trade(message: dict):
                 
                 # Show pin analysis every 100 trades OR every 2 minutes
                 if _trade_counter % 100 == 0 or (current_time - _last_pin_report > 120):
+                    # Get current SPX level from multiple sources
+                    def get_reliable_spx():
+                        # Try quote cache first
+                        spx_quote = quote_cache.get('I:SPX') or quote_cache.get('SPX')
+                        if spx_quote:
+                            bid = spx_quote.get('bid', 0)
+                            ask = spx_quote.get('ask', 0)
+                            if bid and ask:
+                                return (bid + ask) / 2
+                        
+                        # Fallback: use last known SPX level
+                        return CURRENT_SPX_LEVEL
+                    
+                    # Update before analysis
+                    current_spx = get_reliable_spx()
+                    PIN_DETECTOR.update_spx_level(current_spx)
+                    
                     print(f"\n🎯 PIN ANALYSIS UPDATE (Trade #{_trade_counter}):")
                     PIN_DETECTOR.print_human_dashboard()  # Use PIN_DETECTOR, not DIRECTIONAL_PIN_DETECTOR
                     _last_pin_report = current_time
@@ -147,6 +232,10 @@ def _infer_side(trd: dict, q: dict | None) -> str:
 def _run_once(tickers: list[str] | None = None):
     # Initialize pin detector
     initialize_pin_detector()
+    
+    # Initialize enhanced pin detector
+    print("🎯 Initializing Enhanced Pin Detection System...")
+    initialize_enhanced_pin_detector("data/live_enhanced_pins.db")
     
     if tickers:                   # unit-test path
         syms = tickers
@@ -257,6 +346,34 @@ def _run_once(tickers: list[str] | None = None):
                 if msg.get("ev") == "T":              # Trade event
                     process_options_trade(msg)
                     
+                    # Process through enhanced pin detector
+                    global _enhanced_trade_counter
+                    _enhanced_trade_counter += 1
+                    
+                    # Get current SPX level from multiple sources
+                    current_spx = get_current_spx_from_quotes()
+                    
+                    # Process through enhanced pin detector
+                    try:
+                        process_trade_for_pin_detection(msg, current_spx)
+                        
+                        # Generate analysis periodically using enhanced triggering
+                        if should_trigger_enhanced_analysis(_enhanced_trade_counter):
+                            print("\n" + "="*90)
+                            print("🎯 ENHANCED PIN ANALYSIS TRIGGERED")
+                            print("="*90)
+                            analysis = generate_pin_analysis()
+                            print(analysis)
+                            print("="*90 + "\n")
+                        
+                        # Quick status every 500 trades
+                        elif _enhanced_trade_counter % 500 == 0:
+                            status = get_quick_status()
+                            print(f"📊 Quick Status (Trade #{_enhanced_trade_counter}): Confidence {status.get('total_confidence', 0):.1%}, SPX {status.get('spx_level', 0):.2f}")
+                            
+                    except Exception as e:
+                        _LOG.debug(f"Enhanced pin detector error: {e}")
+                    
                 # Handle other message types if needed
                 elif msg.get("ev") in ["AM", "V", "A"] and msg.get("sym") == "I:SPX":
                     # Additional SPX message formats
@@ -273,6 +390,23 @@ def _run_once(tickers: list[str] | None = None):
             
             # Print directional pin dashboard every 1 minute
             if current_time - _last_directional_pin_report > 60:  # Every 1 minute
+                # Get current SPX level from multiple sources
+                def get_reliable_spx():
+                    # Try quote cache first
+                    spx_quote = quote_cache.get('I:SPX') or quote_cache.get('SPX')
+                    if spx_quote:
+                        bid = spx_quote.get('bid', 0)
+                        ask = spx_quote.get('ask', 0)
+                        if bid and ask:
+                            return (bid + ask) / 2
+                    
+                    # Fallback: use last known SPX level
+                    return CURRENT_SPX_LEVEL
+                
+                # Update before analysis
+                current_spx = get_reliable_spx()
+                DIRECTIONAL_PIN_DETECTOR.update_spx_level(current_spx)
+                
                 DIRECTIONAL_PIN_DETECTOR.print_human_dashboard()
                 _last_directional_pin_report = current_time
             continue
@@ -300,6 +434,35 @@ def print_pin_status():
 
 # Set up periodic pin status reporting
 _last_pin_report = 0
+
+# Enhanced analysis frequency function
+def should_trigger_enhanced_analysis(trade_count: int) -> bool:
+    """
+    Smart triggering for enhanced analysis
+    More frequent during high activity periods
+    """
+    from datetime import timedelta
+    
+    # Base frequency: every 100 trades
+    if trade_count % 100 == 0:
+        return True
+        
+    # High frequency during market hours
+    now = datetime.now(zoneinfo.ZoneInfo("US/Eastern"))
+    market_open = now.replace(hour=9, minute=30)
+    market_close = now.replace(hour=16, minute=0)
+    
+    if market_open <= now <= market_close:
+        # Every 50 trades during regular market hours
+        if trade_count % 50 == 0:
+            return True
+            
+        # Every 25 trades in last 30 minutes of trading
+        last_30_min = market_close - timedelta(minutes=30)
+        if now >= last_30_min and trade_count % 25 == 0:
+            return True
+    
+    return False
 
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
