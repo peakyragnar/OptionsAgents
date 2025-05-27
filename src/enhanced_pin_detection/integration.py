@@ -149,8 +149,51 @@ def generate_pin_analysis() -> str:
         print(f"❌ Analysis Error: {e}")
         return ""
 
+def get_quick_status_data():
+    """Get current status data for quick display"""
+    global enhanced_pin_detector, cached_spx_level
+    
+    if not enhanced_pin_detector:
+        return {
+            "confidence": 0.0,
+            "spx_level": cached_spx_level,
+            "trades_processed": 0
+        }
+    
+    try:
+        # Get current confidence
+        confidence_data = enhanced_pin_detector.calculate_enhanced_confidence()
+        total_confidence = confidence_data.get('total', 0.0)
+        
+        # Get current SPX level
+        current_spx = enhanced_pin_detector.current_spx_level
+        
+        # Get trades processed
+        trades_processed = enhanced_pin_detector.total_trades_processed
+        
+        return {
+            "confidence": total_confidence,
+            "spx_level": current_spx if current_spx > 0 else cached_spx_level,
+            "trades_processed": trades_processed
+        }
+    except Exception as e:
+        print(f"❌ Quick status error: {e}")
+        return {
+            "confidence": 0.0,
+            "spx_level": cached_spx_level,
+            "trades_processed": 0
+        }
+
+# Update the get_quick_status function to use the new data function
 def get_quick_status():
-    return {"status": "active"}
+    """Get quick status string for display"""
+    data = get_quick_status_data()
+    return {
+        "status": "active",
+        "confidence": data["confidence"],
+        "spx_level": data["spx_level"],
+        "trades": data["trades_processed"]
+    }
 
 def get_current_spx_level():
     return cached_spx_level

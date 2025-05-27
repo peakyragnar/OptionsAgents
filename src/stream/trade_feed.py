@@ -356,8 +356,24 @@ def _run_once(tickers: list[str] | None = None):
                         
                         # Quick status every 500 trades
                         elif _enhanced_trade_counter % 500 == 0:
-                            status = get_quick_status()
-                            print(f"📊 Quick Status (Trade #{_enhanced_trade_counter}): Confidence {status.get('total_confidence', 0):.1%}, SPX {status.get('spx_level', 0):.2f}")
+                            try:
+                                # Get status from enhanced pin detector
+                                from src.enhanced_pin_detection import get_quick_status
+                                status = get_quick_status()
+                                
+                                # Extract values with defaults
+                                confidence = status.get('confidence', 0.0)
+                                spx_level = status.get('spx_level', 0.0)
+                                trades = status.get('trades', _enhanced_trade_counter)
+                                
+                                # Display quick status
+                                print(f"📊 Quick Status (Trade #{_enhanced_trade_counter}): "
+                                      f"Confidence {confidence:.1%}, SPX {spx_level:.2f}")
+                                      
+                            except Exception as e:
+                                # Fallback display if there's an error
+                                print(f"📊 Quick Status (Trade #{_enhanced_trade_counter}): System active")
+                                print(f"   ⚠️ Status error: {e}")
                             
                     except Exception as e:
                         _LOG.debug(f"Enhanced pin detector error: {e}")
