@@ -145,8 +145,9 @@ def process_options_trade(message: dict):
         ts = datetime.fromtimestamp(message["t"]/1e3, tz=timezone.utc)\
                         .strftime("%H:%M:%S.%f")[:-3]
 
-        print(f"{ts}  {side:4s}  {message['sym']:22s} "
-              f"{message['p']:8.2f}  x{message['s']}")
+        # Suppress individual trade output for cleaner display
+        # print(f"{ts}  {side:4s}  {message['sym']:22s} "
+        #       f"{message['p']:8.2f}  x{message['s']}")
 
         # Push the trade into the queue for dealer engine
         TRADE_Q.put_nowait({
@@ -378,27 +379,28 @@ def _run_once(tickers: list[str] | None = None):
                 print_pin_status()
                 _last_pin_report = current_time
             
-            # Print directional pin dashboard every 1 minute
-            if current_time - _last_directional_pin_report > 60:  # Every 1 minute
-                # Get current SPX level from multiple sources
-                def get_reliable_spx():
-                    # Try quote cache first
-                    spx_quote = quote_cache.get('I:SPX') or quote_cache.get('SPX')
-                    if spx_quote:
-                        bid = spx_quote.get('bid', 0)
-                        ask = spx_quote.get('ask', 0)
-                        if bid and ask:
-                            return (bid + ask) / 2
-                    
-                    # Fallback: use last known SPX level
-                    return CURRENT_SPX_LEVEL
-                
-                # Update before analysis
-                current_spx = get_reliable_spx()
-                DIRECTIONAL_PIN_DETECTOR.update_spx_level(current_spx)
-                
-                DIRECTIONAL_PIN_DETECTOR.print_human_dashboard()
-                _last_directional_pin_report = current_time
+            # DISABLED: Original directional pin detector - using enhanced system instead
+            # # Print directional pin dashboard every 1 minute
+            # if current_time - _last_directional_pin_report > 60:  # Every 1 minute
+            #     # Get current SPX level from multiple sources
+            #     def get_reliable_spx():
+            #         # Try quote cache first
+            #         spx_quote = quote_cache.get('I:SPX') or quote_cache.get('SPX')
+            #         if spx_quote:
+            #             bid = spx_quote.get('bid', 0)
+            #             ask = spx_quote.get('ask', 0)
+            #             if bid and ask:
+            #                 return (bid + ask) / 2
+            #         
+            #         # Fallback: use last known SPX level
+            #         return CURRENT_SPX_LEVEL
+            #     
+            #     # Update before analysis
+            #     current_spx = get_reliable_spx()
+            #     DIRECTIONAL_PIN_DETECTOR.update_spx_level(current_spx)
+            #     
+            #     DIRECTIONAL_PIN_DETECTOR.print_human_dashboard()
+            #     _last_directional_pin_report = current_time
             continue
         except websocket.WebSocketConnectionClosedException:
             print("❌ WebSocket connection closed, attempting reconnection...")
