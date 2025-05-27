@@ -12,7 +12,7 @@ from websocket    import WebSocketTimeoutException, WebSocketConnectionClosedExc
 from .polygon_client import make_ws
 from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
-from src.directional_pin_detector import DIRECTIONAL_PIN_DETECTOR
+# from src.directional_pin_detector import DIRECTIONAL_PIN_DETECTOR
 from src.enhanced_pin_detection import (
     initialize_enhanced_pin_detector,
     process_trade_for_pin_detection,
@@ -77,17 +77,14 @@ CURRENT_SPX_LEVEL = 5906.52  # Updated from your snapshot
 LAST_SPX_UPDATE = None
 PIN_DETECTOR = None
 _last_pin_report = time.time()  # Track last pin status report time
-_last_directional_pin_report = time.time()  # Track last directional pin report time
+# _last_directional_pin_report = time.time()  # Track last directional pin report time
 _trade_counter = 0  # Track number of trades processed
 _enhanced_trade_counter = 0  # Track trades for enhanced pin detector
 
 def initialize_pin_detector():
-    """Initialize the pin detector for real-time updates"""
-    global PIN_DETECTOR
-    # Use the global DIRECTIONAL_PIN_DETECTOR instance
-    PIN_DETECTOR = DIRECTIONAL_PIN_DETECTOR
-    print("✅ Directional pin detector initialized in trade feed")
-    return True
+    """Original pin detector - disabled, using enhanced only"""
+    # Disabled - using enhanced pin detector instead
+    return None
 
 def process_spx_index_update(message: dict):
     """
@@ -218,7 +215,7 @@ def _infer_side(trd: dict, q: dict | None) -> str:
 
 def _run_once(tickers: list[str] | None = None):
     # Initialize pin detector
-    initialize_pin_detector()
+    # initialize_pin_detector()  # Disabled - using enhanced only
     
     # Initialize enhanced pin detector
     print("🎯 Initializing Enhanced Pin Detection System...")
@@ -349,7 +346,7 @@ def _run_once(tickers: list[str] | None = None):
                         process_trade_for_pin_detection(msg, current_spx)
                         
                         # Generate analysis periodically using enhanced triggering
-                        if should_trigger_enhanced_analysis(_enhanced_trade_counter):
+                        if should_trigger_analysis(_enhanced_trade_counter):
                             print("\n" + "="*90)
                             print("🎯 ENHANCED PIN ANALYSIS TRIGGERED")
                             print("="*90)
@@ -437,34 +434,8 @@ def print_pin_status():
 # Set up periodic pin status reporting
 _last_pin_report = 0
 
-# Enhanced analysis frequency function
-def should_trigger_enhanced_analysis(trade_count: int) -> bool:
-    """
-    Smart triggering for enhanced analysis
-    More frequent during high activity periods
-    """
-    from datetime import timedelta
-    
-    # Base frequency: every 100 trades
-    if trade_count % 100 == 0:
-        return True
-        
-    # High frequency during market hours
-    now = datetime.now(zoneinfo.ZoneInfo("US/Eastern"))
-    market_open = now.replace(hour=9, minute=30)
-    market_close = now.replace(hour=16, minute=0)
-    
-    if market_open <= now <= market_close:
-        # Every 50 trades during regular market hours
-        if trade_count % 50 == 0:
-            return True
-            
-        # Every 25 trades in last 30 minutes of trading
-        last_30_min = market_close - timedelta(minutes=30)
-        if now >= last_30_min and trade_count % 25 == 0:
-            return True
-    
-    return False
+# Enhanced analysis frequency function - REMOVED
+# Using should_trigger_analysis from enhanced_pin_detection module instead
 
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
@@ -479,7 +450,7 @@ if __name__ == "__main__":
     )
     
     # Initialize pin detector
-    initialize_pin_detector()
+    # initialize_pin_detector()  # Disabled - using enhanced only
     
     while True:
         try:
