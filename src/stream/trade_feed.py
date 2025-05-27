@@ -23,20 +23,17 @@ PING_SECONDS = 25
 CURRENT_SPX_LEVEL = 5850.0
 LAST_SPX_UPDATE = None
 PIN_DETECTOR = None
-_last_pin_report = 0  # Track last pin status report time
+_last_pin_report = time.time()  # Track last pin status report time
 _last_directional_pin_report = time.time()  # Track last directional pin report time
+_trade_counter = 0  # Track number of trades processed
 
 def initialize_pin_detector():
     """Initialize the pin detector for real-time updates"""
     global PIN_DETECTOR
-    try:
-        from src.dealer.pin_detector import ZeroDTEPinDetector
-        PIN_DETECTOR = ZeroDTEPinDetector()
-        print("✅ Pin detector initialized in trade feed")
-        return True
-    except ImportError:
-        print("⚠️  Pin detector not available")
-        return False
+    # Use the global DIRECTIONAL_PIN_DETECTOR instance
+    PIN_DETECTOR = DIRECTIONAL_PIN_DETECTOR
+    print("✅ Directional pin detector initialized in trade feed")
+    return True
 
 def process_spx_index_update(message: dict):
     """
@@ -110,37 +107,28 @@ def process_options_trade(message: dict):
         # Also process for pin detector if available
         if PIN_DETECTOR and message["sym"].startswith("O:SPX"):
             try:
-                from src.dealer.pin_detector import Trade
+                # Process through pin detector using the format it expects
+                PIN_DETECTOR.process_trade({
+                    'symbol': message["sym"],
+                    'price': message["p"],
+                    'size': message["s"],
+                    'timestamp': message["t"],
+                    'conditions': message.get("c", [])
+                })
                 
-                # Parse strike and option type from symbol
-                # Format: O:SPXW250523C05850000
-                symbol = message["sym"]
-                if len(symbol) >= 21:
-                    option_type = symbol[-9]  # C or P
-                    strike_str = symbol[-8:]  # 05850000
-                    strike = float(strike_str) / 1000  # Convert to actual strike
-                    
-                    # Create Trade object
-                    trade = Trade(
-                        symbol=symbol,
-                        strike=strike,
-                        option_type=option_type,
-                        price=message["p"],
-                        size=message["s"],
-                        timestamp=datetime.fromtimestamp(message["t"]/1e3, tz=timezone.utc),
-                        side=side,
-                        is_premium_seller=False  # Will be determined by detector
-                    )
-                    
-                    # Get NBBO for classification
-                    nbbo_bid = q.get("bid", 0) if q else 0
-                    nbbo_ask = q.get("ask", 0) if q else 0
-                    
-                    # Process through pin detector
-                    PIN_DETECTOR.process_trade(trade, nbbo_bid, nbbo_ask)
+                # ADD THIS SECTION:
+                global _trade_counter, _last_pin_report
+                _trade_counter += 1
+                current_time = time.time()
+                
+                # Show pin analysis every 100 trades OR every 2 minutes
+                if _trade_counter % 100 == 0 or (current_time - _last_pin_report > 120):
+                    print(f"\n🎯 PIN ANALYSIS UPDATE (Trade #{_trade_counter}):")
+                    PIN_DETECTOR.print_human_dashboard()  # Use PIN_DETECTOR, not DIRECTIONAL_PIN_DETECTOR
+                    _last_pin_report = current_time
                     
             except Exception as e:
-                _LOG.debug(f"Pin detector processing error: {e}")
+                pass  # Silent error handling
         
     except Exception as e:
         _LOG.error(f"Error processing options trade: {e}")
@@ -268,32 +256,6 @@ def _run_once(tickers: list[str] | None = None):
                 # Handle options trades
                 if msg.get("ev") == "T":              # Trade event
                     process_options_trade(msg)
-                    
-                    # Update pin detector with real-time trade
-                    if PIN_DETECTOR:
-                        try:
-                            # Convert to format pin detector expects
-                            trade_data = {
-                                'symbol': msg.get('sym'),
-                                'price': msg.get('p'),
-                                'size': msg.get('s'),
-                                'timestamp': msg.get('t')
-                            }
-                            PIN_DETECTOR.process_trade(trade_data)
-                        except Exception as e:
-                            _LOG.debug(f"Pin detector error: {e}")
-                    
-                    # Feed trade to directional pin detector
-                    try:
-                        DIRECTIONAL_PIN_DETECTOR.process_trade({
-                            'symbol': msg.get('sym'),
-                            'price': msg.get('p'), 
-                            'size': msg.get('s'),
-                            'timestamp': msg.get('t'),
-                            'conditions': msg.get('c', [])
-                        })
-                    except Exception as e:
-                        _LOG.debug(f"Directional pin detector error: {e}")
                     
                 # Handle other message types if needed
                 elif msg.get("ev") in ["AM", "V", "A"] and msg.get("sym") == "I:SPX":
