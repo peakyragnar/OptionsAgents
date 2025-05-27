@@ -12,6 +12,7 @@ from websocket    import WebSocketTimeoutException
 from .polygon_client import make_ws
 from .quote_cache    import quote_cache
 from src.polygon_helpers import fetch_spx_chain
+from src.directional_pin_detector import DIRECTIONAL_PIN_DETECTOR
 
 
 _LOG = logging.getLogger("trade_feed")
@@ -23,6 +24,7 @@ CURRENT_SPX_LEVEL = 5850.0
 LAST_SPX_UPDATE = None
 PIN_DETECTOR = None
 _last_pin_report = 0  # Track last pin status report time
+_last_directional_pin_report = time.time()  # Track last directional pin report time
 
 def initialize_pin_detector():
     """Initialize the pin detector for real-time updates"""
@@ -68,6 +70,9 @@ def process_spx_index_update(message: dict):
             # Update pin detector if available
             if PIN_DETECTOR:
                 PIN_DETECTOR.current_spx = CURRENT_SPX_LEVEL
+            
+            # Update directional pin detector with SPX level
+            DIRECTIONAL_PIN_DETECTOR.update_spx_level(CURRENT_SPX_LEVEL)
                 
             # Print SPX updates (but not too frequently)
             spx_change = CURRENT_SPX_LEVEL - old_spx
@@ -164,9 +169,13 @@ def _run_once(tickers: list[str] | None = None):
             _, real_spx_price = load_symbols_from_snapshot()
             current_spx = real_spx_price if real_spx_price else 5800
             print(f"📊 Using real SPX level: {current_spx:.2f}")
+            # Update directional pin detector with SPX level
+            update_pin_detector_with_spx_level(current_spx)
         except:
             current_spx = 5800  # Fallback
             print(f"📊 Using fallback SPX level: {current_spx}")
+            # Update directional pin detector with SPX level
+            update_pin_detector_with_spx_level(current_spx)
         
         # Round to nearest 25 (SPX strikes are typically in 25-point increments)
         atm_strike = round(current_spx / 25) * 25
@@ -274,6 +283,18 @@ def _run_once(tickers: list[str] | None = None):
                         except Exception as e:
                             _LOG.debug(f"Pin detector error: {e}")
                     
+                    # Feed trade to directional pin detector
+                    try:
+                        DIRECTIONAL_PIN_DETECTOR.process_trade({
+                            'symbol': msg.get('sym'),
+                            'price': msg.get('p'), 
+                            'size': msg.get('s'),
+                            'timestamp': msg.get('t'),
+                            'conditions': msg.get('c', [])
+                        })
+                    except Exception as e:
+                        _LOG.debug(f"Directional pin detector error: {e}")
+                    
                 # Handle other message types if needed
                 elif msg.get("ev") in ["AM", "V", "A"] and msg.get("sym") == "I:SPX":
                     # Additional SPX message formats
@@ -282,11 +303,16 @@ def _run_once(tickers: list[str] | None = None):
         except WebSocketTimeoutException:
             # Normal timeout - just continue waiting
             # Print pin status every few minutes
-            global _last_pin_report
+            global _last_pin_report, _last_directional_pin_report
             current_time = time.time()
             if current_time - _last_pin_report > 120:  # Every 2 minutes
                 print_pin_status()
                 _last_pin_report = current_time
+            
+            # Print directional pin dashboard every 1 minute
+            if current_time - _last_directional_pin_report > 60:  # Every 1 minute
+                DIRECTIONAL_PIN_DETECTOR.print_human_dashboard()
+                _last_directional_pin_report = current_time
             continue
         except Exception:
             _LOG.exception("bad message processing")
@@ -368,3 +394,7 @@ def get_current_spx() -> float:
 def get_pin_detector():
     """Get the current pin detector instance"""
     return PIN_DETECTOR
+
+def update_pin_detector_with_spx_level(spx_level: float):
+    """Update pin detector with current SPX level from snapshot"""
+    DIRECTIONAL_PIN_DETECTOR.update_spx_level(spx_level)
