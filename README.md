@@ -20,6 +20,15 @@ The system consists of several key components:
    - DuckDB: Stores dealer gamma snapshots for analysis
    - Parquet: Stores option chain data efficiently
 
+## Recent Updates
+
+**✅ Snapshot System Fixed (2025-05-28)**
+- Fixed critical issue with expired options data
+- Added reliable 0DTE options capture with proper date handling
+- Implemented automated scheduler for continuous snapshots
+- Added real-time monitoring and health checking
+- System now processes 2,500+ trades with live gamma analysis
+
 ## Setup
 
 1. Create a Python virtual environment:
@@ -52,6 +61,21 @@ This launches the complete system:
 - Trade feed for streaming trades from Polygon
 - Dealer engine for processing trades and calculating gamma
 - Automatic snapshots saved to DuckDB
+
+### System Monitoring
+
+Check snapshot system health:
+
+```bash
+# Real-time status check
+python check_snapshot_status.py
+
+# Continuous monitoring
+python check_snapshot_status.py --watch
+
+# Watch snapshot scheduler logs
+tail -f ~/logs/OptionsAgents/components/snapshot_scheduler.log
+```
 
 ### Offline Replay
 
