@@ -256,46 +256,46 @@ def live(dashboard: bool = typer.Option(False, "--dashboard", "-d", help="Enable
                     
                 except ImportError:
                     print("⚠️  Pin detector not available - running without pin detection")
-            
-            # Run the main streaming components with error handling
-            tasks = []
-            
-            async def run_with_error_handling(coro, name):
-                """Run a coroutine with error handling and restart on failure"""
-                while not killer.kill_now:
-                    try:
-                        logger.info(f"Starting {name}...")
-                        await coro
-                    except asyncio.CancelledError:
-                        logger.info(f"{name} cancelled")
-                        break
-                    except Exception as e:
-                        logger.error(f"Error in {name}: {e}", exc_info=True)
-                        if not killer.kill_now:
-                            logger.info(f"Restarting {name} in 5 seconds...")
-                            await asyncio.sleep(5)
-                        else:
+                
+                # Run the main streaming components with error handling
+                tasks = []
+                
+                async def run_with_error_handling(coro, name):
+                    """Run a coroutine with error handling and restart on failure"""
+                    while not killer.kill_now:
+                        try:
+                            logger.info(f"Starting {name}...")
+                            await coro
+                        except asyncio.CancelledError:
+                            logger.info(f"{name} cancelled")
                             break
+                        except Exception as e:
+                            logger.error(f"Error in {name}: {e}", exc_info=True)
+                            if not killer.kill_now:
+                                logger.info(f"Restarting {name} in 5 seconds...")
+                                await asyncio.sleep(5)
+                            else:
+                                break
+                
+                tasks = [
+                    asyncio.create_task(run_with_error_handling(quotes_run(), "Quote Cache")),
+                    asyncio.create_task(run_with_error_handling(trades_run(symbols), "Trade Feed")),
+                    asyncio.create_task(run_with_error_handling(engine_run(append_gamma), "Dealer Engine"))
+                ]
             
-            tasks = [
-                asyncio.create_task(run_with_error_handling(quotes_run(), "Quote Cache")),
-                asyncio.create_task(run_with_error_handling(trades_run(symbols), "Trade Feed")),
-                asyncio.create_task(run_with_error_handling(engine_run(append_gamma), "Dealer Engine"))
-            ]
+                # Wait for shutdown signal
+                while not killer.kill_now:
+                    await asyncio.sleep(1)
+                
+                # Cancel all tasks gracefully
+                logger.info("Cancelling all tasks...")
+                for task in tasks:
+                    task.cancel()
+                
+                # Wait for tasks to complete
+                await asyncio.gather(*tasks, return_exceptions=True)
+                logger.info("All tasks cancelled")
             
-            # Wait for shutdown signal
-            while not killer.kill_now:
-                await asyncio.sleep(1)
-            
-            # Cancel all tasks gracefully
-            logger.info("Cancelling all tasks...")
-            for task in tasks:
-                task.cancel()
-            
-            # Wait for tasks to complete
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info("All tasks cancelled")
-        
             asyncio.run(main())
             
             # Reset error count on successful completion

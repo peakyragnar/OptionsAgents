@@ -337,7 +337,8 @@ def _run_once(tickers: list[str] | None = None):
 
     # Try to connect with resilient connection handling
     try:
-        ws = asyncio.run(connect_with_backoff(make_ws, WS_URL, syms))
+        # Direct connection without async wrapper
+        ws = make_ws(WS_URL, syms)
         if not ws:
             _LOG.error("Failed to establish WebSocket connection after all attempts")
             return
@@ -545,7 +546,7 @@ if __name__ == "__main__":
         except Exception as exc:
             _LOG.error("WS crashed: %s", exc)
             # Use exponential backoff for main loop reconnections too
-            global _connection_attempts
+            # Note: _connection_attempts is already global at module level
             _connection_attempts = min(_connection_attempts + 1, MAX_CONNECTION_ATTEMPTS - 1)
             backoff_time = min(
                 BASE_BACKOFF * (2 ** _connection_attempts),
