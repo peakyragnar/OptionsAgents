@@ -21,11 +21,22 @@ from src.enhanced_pin_detection import (
     get_current_spx_level,
     get_quick_status
 )
+from src.utils.logging_config import setup_application_logging, setup_component_logger, RateLimitedLogger
 
-
-_LOG = logging.getLogger("trade_feed")
+# Initialize logging
+setup_application_logging()
+_LOG = setup_component_logger("trade_feed")
+_RATE_LIMITED_LOG = RateLimitedLogger(_LOG)
 WS_URL       = "wss://socket.polygon.io/options"
 PING_SECONDS = 25
+
+# Connection resilience settings
+MAX_CONNECTION_ATTEMPTS = 5
+BASE_BACKOFF = 1  # seconds
+MAX_BACKOFF = 300  # 5 minutes
+CIRCUIT_BREAKER_DURATION = 600  # 10 minutes
+_connection_attempts = 0
+_last_successful_connection = None
 
 # Add this function to get SPX level from your existing quote cache
 def debug_spx_detection():
@@ -120,7 +131,7 @@ def process_spx_index_update(message: dict):
                 PIN_DETECTOR.current_spx = CURRENT_SPX_LEVEL
             
             # Update directional pin detector with SPX level
-            DIRECTIONAL_PIN_DETECTOR.update_spx_level(CURRENT_SPX_LEVEL)
+            # DIRECTIONAL_PIN_DETECTOR.update_spx_level(CURRENT_SPX_LEVEL)  # Disabled - using enhanced pin detector
                 
             # Print SPX updates (but not too frequently)
             spx_change = CURRENT_SPX_LEVEL - old_spx
@@ -130,7 +141,7 @@ def process_spx_index_update(message: dict):
             return True
             
     except Exception as e:
-        _LOG.error(f"Error processing SPX update: {e}")
+        _RATE_LIMITED_LOG.error(f"Error processing SPX update: {e}")
         
     return False
 
@@ -200,7 +211,7 @@ def process_options_trade(message: dict):
                 pass  # Silent error handling
         
     except Exception as e:
-        _LOG.error(f"Error processing options trade: {e}")
+        _RATE_LIMITED_LOG.error(f"Error processing options trade: {e}")
 
 def _infer_side(trd: dict, q: dict | None) -> str:
     "Return 'BUY' | 'SELL' | '?'  using last cached NBBO."
@@ -212,6 +223,52 @@ def _infer_side(trd: dict, q: dict | None) -> str:
     if px <= q["bid"] + 0.01:
         return "SELL"
     return "?"
+
+async def connect_with_backoff(ws_func, *args, **kwargs):
+    """Connect with exponential backoff and circuit breaker"""
+    global _connection_attempts, _last_successful_connection
+    
+    while _connection_attempts < MAX_CONNECTION_ATTEMPTS:
+        try:
+            _LOG.info(f"Attempting connection #{_connection_attempts + 1}")
+            
+            # Try to establish connection
+            ws = ws_func(*args, **kwargs)
+            
+            # Reset on successful connection
+            _connection_attempts = 0
+            _last_successful_connection = time.time()
+            _LOG.info("Successfully connected to trade feed")
+            return ws
+            
+        except Exception as e:
+            _connection_attempts += 1
+            backoff_time = min(
+                BASE_BACKOFF * (2 ** _connection_attempts),
+                MAX_BACKOFF
+            )
+            
+            # Use rate-limited logging to prevent spam
+            _RATE_LIMITED_LOG.error(
+                f"Connection attempt {_connection_attempts} failed: {e}. "
+                f"Retrying in {backoff_time} seconds"
+            )
+            
+            if _connection_attempts >= MAX_CONNECTION_ATTEMPTS:
+                _LOG.error("Max connection attempts reached. Entering circuit breaker mode.")
+                await enter_circuit_breaker()
+                return None
+            
+            await asyncio.sleep(backoff_time)
+    
+    return None
+
+async def enter_circuit_breaker():
+    """Circuit breaker - wait longer before retrying"""
+    global _connection_attempts
+    _LOG.warning(f"Circuit breaker activated. Waiting {CIRCUIT_BREAKER_DURATION} seconds before retry.")
+    await asyncio.sleep(CIRCUIT_BREAKER_DURATION)
+    _connection_attempts = 0  # Reset for next attempt
 
 def _run_once(tickers: list[str] | None = None):
     # Initialize pin detector
@@ -278,7 +335,15 @@ def _run_once(tickers: list[str] | None = None):
     params = ",".join(syms)
     print(f"📡 Subscribing to {len(syms)} symbols ({len([s for s in syms if s.startswith('O:')])} options + {len([s for s in syms if s.startswith('I:')])} indices)")
 
-    ws = make_ws(WS_URL, syms)
+    # Try to connect with resilient connection handling
+    try:
+        ws = asyncio.run(connect_with_backoff(make_ws, WS_URL, syms))
+        if not ws:
+            _LOG.error("Failed to establish WebSocket connection after all attempts")
+            return
+    except Exception as e:
+        _LOG.error(f"Critical error during connection: {e}")
+        return
     
     # Set longer timeouts for stability
     ws.settimeout(20)
@@ -373,7 +438,7 @@ def _run_once(tickers: list[str] | None = None):
                             except Exception as e:
                                 # Fallback display if there's an error
                                 print(f"📊 Quick Status (Trade #{_enhanced_trade_counter}): System active")
-                                print(f"   ⚠️ Status error: {e}")
+                                _LOG.debug(f"Status error: {e}")
                             
                     except Exception as e:
                         _LOG.debug(f"Enhanced pin detector error: {e}")
@@ -420,11 +485,11 @@ def _run_once(tickers: list[str] | None = None):
             time.sleep(5)  # Wait before reconnecting
             return  # Exit and let the outer loop reconnect
         except json.JSONDecodeError as e:
-            _LOG.error(f"JSON decode error: {e}")
+            _RATE_LIMITED_LOG.error(f"JSON decode error: {e}")
             continue  # Skip bad messages
         except Exception as e:
             print(f"❌ WebSocket error: {e}")
-            _LOG.exception("bad message processing")
+            _RATE_LIMITED_LOG.error(f"WebSocket error: {e}")
             time.sleep(2)
             return  # Exit and let the outer loop reconnect
 
@@ -475,10 +540,19 @@ if __name__ == "__main__":
             if PIN_DETECTOR:
                 print(f"\n🎯 Final Pin Status:")
                 print_pin_status()
+            _LOG.info("Shutting down trade feed gracefully")
             raise
         except Exception as exc:
-            _LOG.error("WS crashed: %s — reconnecting in 3 s", exc)
-            time.sleep(3)
+            _LOG.error("WS crashed: %s", exc)
+            # Use exponential backoff for main loop reconnections too
+            global _connection_attempts
+            _connection_attempts = min(_connection_attempts + 1, MAX_CONNECTION_ATTEMPTS - 1)
+            backoff_time = min(
+                BASE_BACKOFF * (2 ** _connection_attempts),
+                MAX_BACKOFF
+            )
+            _LOG.info(f"Reconnecting in {backoff_time} seconds...")
+            time.sleep(backoff_time)
 
 # --------------------------------------------------------------------------- #
 # compatibility helpers for unit-tests
@@ -511,4 +585,5 @@ def get_pin_detector():
 
 def update_pin_detector_with_spx_level(spx_level: float):
     """Update pin detector with current SPX level from snapshot"""
-    DIRECTIONAL_PIN_DETECTOR.update_spx_level(spx_level)
+    # DIRECTIONAL_PIN_DETECTOR.update_spx_level(spx_level)  # Disabled - using enhanced pin detector
+    pass

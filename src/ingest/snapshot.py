@@ -6,18 +6,133 @@ data/parquet/spx/date=YYYY-MM-DD/HH_MM_SS.parquet
 """
 
 import datetime, os, pathlib, pandas as pd, math, sys
+import logging
+import time
+from datetime import date, timedelta
 import dotenv
 from polygon import RESTClient
 
 # Add project root to path to allow importing from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from src.utils.logging_config import setup_application_logging, setup_component_logger
 from src.utils.greeks import bs_greeks, implied_vol, estimate_vol_from_moneyness, bs_greeks_dict
+
+# Initialize logging
+setup_application_logging()
+logger = setup_component_logger(__name__)
 
 dotenv.load_dotenv()
 client = RESTClient(os.getenv("POLYGON_KEY"))
 
 def _nan_if_none(x):
     return float("nan") if x is None else float(x)
+
+def get_spx_price_fixed(client: RESTClient):
+    """
+    Fixed version to get SPX price using correct Polygon.io API methods
+    """
+    try:
+        # Method 1: Try current price (most reliable)
+        logger.info("Attempting to get current SPX price...")
+        
+        # For SPX, use the correct ticker format
+        ticker = "I:SPX"  # Index format
+        
+        try:
+            # Get current price using the correct method
+            current_price = client.get_last_trade(ticker)
+            if hasattr(current_price, 'price') and current_price.price:
+                logger.info(f"✅ Got current SPX price: {current_price.price}")
+                return float(current_price.price)
+        except Exception as e:
+            logger.warning(f"Current price failed: {e}")
+        
+        # Method 2: Try previous close using aggregates
+        logger.info("Trying previous close via aggregates...")
+        try:
+            yesterday = (date.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+            today = date.today().strftime('%Y-%m-%d')
+            
+            # Get daily aggregates (this is the correct method)
+            aggs = client.get_aggs(
+                ticker=ticker,
+                multiplier=1,
+                timespan="day", 
+                from_=yesterday,
+                to=today,
+                adjusted=True,
+                sort="desc",
+                limit=5
+            )
+            
+            if hasattr(aggs, 'results') and aggs.results:
+                close_price = aggs.results[0].close
+                logger.info(f"✅ Got SPX price from aggregates: {close_price}")
+                return float(close_price)
+            else:
+                logger.warning("No aggregate results found")
+                
+        except Exception as e:
+            logger.warning(f"Aggregates method failed: {e}")
+        
+        # Method 3: Try snapshot (alternative)
+        logger.info("Trying snapshot method...")
+        try:
+            snapshot = client.get_snapshot_ticker("indices", ticker)
+            if hasattr(snapshot, 'value') and snapshot.value:
+                logger.info(f"✅ Got SPX price from snapshot: {snapshot.value}")
+                return float(snapshot.value)
+        except Exception as e:
+            logger.warning(f"Snapshot method failed: {e}")
+            
+        # Method 4: Fallback to a known working method
+        logger.info("Trying alternative ticker format...")
+        try:
+            # Sometimes SPX data is available under different formats
+            alt_ticker = "SPX"
+            current_price = client.get_last_trade(alt_ticker)
+            if hasattr(current_price, 'price') and current_price.price:
+                logger.info(f"✅ Got SPX price with alt ticker: {current_price.price}")
+                return float(current_price.price)
+        except Exception as e:
+            logger.warning(f"Alternative ticker failed: {e}")
+        
+        # If all methods fail, raise a clear error
+        raise RuntimeError(
+            "Unable to fetch SPX price from Polygon.io. "
+            "This might be due to market hours, API limits, or subscription level. "
+            "Please check your Polygon.io subscription and API key."
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching SPX price: {e}")
+        raise
+
+def with_retry_and_backoff(func, max_retries=3, base_delay=1):
+    """
+    Wrapper to add proper retry logic with exponential backoff
+    """
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Final attempt failed: {e}")
+                raise
+            
+            delay = base_delay * (2 ** attempt)
+            logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
+            time.sleep(delay)
+
+def get_spx_price_with_retry(client: RESTClient):
+    """
+    Get SPX price with retry logic
+    """
+    return with_retry_and_backoff(
+        lambda: get_spx_price_fixed(client),
+        max_retries=3,
+        base_delay=2
+    )
 
 # ---------------------------------------------------------------------------
 # Fast vectorised Black–Scholes DELTA (works with numpy / pandas Series)
@@ -54,6 +169,7 @@ def fetch_chain() -> pd.DataFrame:
     # ------------------------------------------------------------------
     # Get options with limit to avoid timeout, focus on today's expiry
     try:
+        logger.info("Fetching options chain...")
         # Try with params to filter by expiration date
         options_iter = client.list_snapshot_options_chain(
             "SPX",
@@ -61,6 +177,7 @@ def fetch_chain() -> pd.DataFrame:
         )
         
         # Convert limited options to list
+        logger.info("Fetching options chain (limited to 500 contracts)...")
         print("Fetching options chain (limited to 500 contracts)...")
         all_options = []
         for i, opt in enumerate(options_iter):
@@ -68,47 +185,22 @@ def fetch_chain() -> pd.DataFrame:
             if i >= 499:  # Extra safety to ensure we don't process too many
                 break
                 
+        logger.info(f"Retrieved {len(all_options)} options")
         print(f"Retrieved {len(all_options)} options")
         
         # Separate calls and puts
         calls = [opt for opt in all_options if opt.details.contract_type == "call"]
         puts = [opt for opt in all_options if opt.details.contract_type == "put"]
+        logger.info(f"Found {len(calls)} calls and {len(puts)} puts")
         print(f"Found {len(calls)} calls and {len(puts)} puts")
     except Exception as e:
+        logger.error(f"Failed to retrieve options chain: {e}")
         raise RuntimeError(f"Failed to retrieve options chain: {e}")
     # ------------------------------------------------------------------
 
 # 2. INDEX PRICE - try multiple API approaches ───────────────────────
-    try:
-        # Method 1: Try previous close (reliable data point)
-        prev_close = client.get_previous_close("I:SPX")
-        under_px = prev_close.close
-        print(f"Using SPX previous close: {under_px}")
-    except Exception as e1:
-        try:
-            # Method 2: Try daily OHLC
-            daily = client.get_daily_open_close("I:SPX", datetime.date.today().isoformat())
-            under_px = daily.close
-            print(f"Using SPX daily close: {under_px}")
-        except Exception as e2:
-            try:
-                # Method 3: Try aggregates for today
-                from_date = datetime.date.today().isoformat()
-                to_date = from_date
-                aggs = client.get_aggs("I:SPX", 1, "day", from_date, to_date, limit=10)
-                if aggs:
-                    under_px = aggs[0].close
-                    print(f"Using SPX aggregate close: {under_px}")
-                else:
-                    raise RuntimeError("No aggregate data available for I:SPX")
-            except Exception as e3:
-                # Fail with detailed error information
-                raise RuntimeError(
-                    f"Unable to get SPX price from any endpoint. "
-                    f"Previous close error: {e1}, "
-                    f"Daily OHLC error: {e2}, "
-                    f"Aggregates error: {e3}"
-                )
+    # Using fixed API methods with retry logic
+    under_px = get_spx_price_with_retry(client)
     # ──────────────────────────────────────────────────────────────
 
     # Calculate Greeks for options with missing data
@@ -259,9 +351,17 @@ def read_latest_chain(symbol="SPX"):
     return fetch_chain()
 
 def main(symbol="SPX"):
-    tbl = read_latest_chain(symbol)  # pull current order book
-    write_parquet_atomic(tbl, path_for_now())
-    print(f"Wrote {len(tbl)} rows → {path_for_now()}")
+    try:
+        logger.info(f"Starting snapshot process for {symbol}")
+        tbl = read_latest_chain(symbol)  # pull current order book
+        path = path_for_now()
+        write_parquet_atomic(tbl, path)
+        logger.info(f"Successfully wrote {len(tbl)} rows → {path}")
+        print(f"Wrote {len(tbl)} rows → {path}")
+    except Exception as e:
+        logger.error(f"Snapshot process failed: {e}", exc_info=True)
+        # Exit gracefully instead of infinite retry
+        sys.exit(1)
 
 if __name__ == "__main__":
     import argparse

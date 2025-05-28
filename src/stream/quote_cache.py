@@ -1,6 +1,12 @@
 """Shared in-process NBBO cache (used by nbbo_feed & unit-tests)."""
 
+import logging
 from typing import Dict, TypedDict
+from src.utils.logging_config import setup_application_logging, setup_component_logger
+
+# Initialize logging
+setup_application_logging()
+logger = setup_component_logger(__name__)
 
 class Quote(TypedDict, total=False):
     bid:   float

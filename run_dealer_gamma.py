@@ -3,7 +3,13 @@
 Run dealer gamma calculation and display the results.
 """
 import argparse
+import logging
+from src.utils.logging_config import setup_application_logging, setup_component_logger
 from src.tools.dealer_gamma import dealer_gamma_snapshot
+
+# Initialize logging
+setup_application_logging()
+logger = setup_component_logger(__name__)
 
 
 def format_value(value, formatter):

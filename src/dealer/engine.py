@@ -13,11 +13,17 @@ run(snapshot_cb: Callable[[float, float], None], *,
 """
 from __future__ import annotations
 import asyncio, time, math, datetime as dt
+import logging
 from typing import Callable
 
+from src.utils.logging_config import setup_application_logging, setup_component_logger
 from src.stream.trade_feed import TRADE_Q
 from src.stream.quote_cache import quotes            # live NBBO cache
 from src.greeks.surface import VolSurface
+
+# Initialize logging
+setup_application_logging()
+logger = setup_component_logger(__name__)
 from src.utils.occ import parse as parse_occ
 from src.dealer.strike_book import StrikeBook, Side
 from src.utils.greeks import gamma as bs_gamma     # scalar γ
