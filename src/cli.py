@@ -39,6 +39,7 @@ def load_symbols_from_snapshot():
     from datetime import datetime
     from pathlib import Path
     import os
+    import pytz
     
     try:
         # Find latest snapshot
@@ -65,6 +66,21 @@ def load_symbols_from_snapshot():
         # Extract real SPX price from under_px column
         current_spx = df['under_px'].iloc[0] if 'under_px' in df.columns else 5800.0
         print(f"📊 Real SPX level from snapshot: {current_spx}")
+        
+        # Check expiry date - ONLY use options expiring TODAY
+        if 'expiry' in df.columns:
+            option_expiry = df['expiry'].iloc[0]
+            print(f"📅 Options expire on: {option_expiry}")
+            
+            # Get today's date for 0DTE
+            et_tz = pytz.timezone('US/Eastern')
+            now = datetime.now(et_tz)
+            
+            # After 4 PM ET, we need tomorrow's options
+            if now.hour >= 16:
+                print("🌙 After 4 PM ET - skipping to tomorrow's options")
+                # For now, return empty to avoid using expired options
+                return [], current_spx
         
         # Filter for realistic strikes only (within +/- 200 points of current SPX)
         print(f"📊 Filtering for realistic strikes around SPX {current_spx:.2f}")
