@@ -64,13 +64,55 @@ def get_next_trading_day():
 
 def get_spx_price_bulletproof(client: RESTClient, max_retries=5):
     """
-    Get SPX price with multiple fallbacks and proper error handling
+    Get LIVE SPX price during market hours, fallback to previous close when closed
     """
     ticker = "I:SPX"
     
     for attempt in range(max_retries):
         try:
-            # Method 1: Get aggregates (most reliable)
+            # Method 1: Try to get live price during market hours using minute bars
+            if is_market_open():
+                logger.info(f"Attempt {attempt + 1}: Getting LIVE SPX price (market open)")
+                try:
+                    # Get very recent minute bars for live-ish price
+                    from datetime import datetime
+                    now = datetime.now()
+                    today_str = now.strftime('%Y-%m-%d')
+                    
+                    # Get minute bars from today
+                    minute_aggs = client.get_aggs(
+                        ticker=ticker,
+                        multiplier=1,
+                        timespan="minute",
+                        from_=today_str,
+                        to=today_str,
+                        adjusted=True,
+                        sort="desc",
+                        limit=5  # Get last 5 minutes
+                    )
+                    
+                    minute_results = list(minute_aggs)
+                    if minute_results:
+                        # Get the most recent minute close
+                        latest_minute = minute_results[0]  # Most recent first due to sort=desc
+                        live_price = float(latest_minute.close)
+                        
+                        # Convert timestamp to readable time
+                        minute_time = datetime.fromtimestamp(latest_minute.timestamp / 1000)
+                        logger.info(f"✅ Got LIVE SPX price: {live_price} (from {minute_time.strftime('%H:%M:%S')})")
+                        
+                        # Sanity check - SPX should be between 3000 and 7000
+                        if 3000 <= live_price <= 7000:
+                            return live_price
+                        else:
+                            logger.warning(f"Live SPX price {live_price} outside expected range, trying aggregates")
+                    else:
+                        logger.warning("No minute data available, trying aggregates")
+                    
+                except Exception as e:
+                    logger.warning(f"Live price fetch failed: {e}, trying aggregates")
+            
+            # Method 2: Get aggregates (previous close or when market closed)
             logger.info(f"Attempt {attempt + 1}: Getting SPX price via aggregates")
             
             # Look back up to 5 days to find valid data
@@ -88,10 +130,14 @@ def get_spx_price_bulletproof(client: RESTClient, max_retries=5):
                 limit=10
             )
             
-            if hasattr(aggs, 'results') and aggs.results and len(aggs.results) > 0:
+            # Convert iterator to list
+            results = list(aggs)
+            if results:
                 # Get the most recent close price
-                close_price = float(aggs.results[0].close)
-                logger.info(f"✅ Got SPX price from aggregates: {close_price}")
+                latest = results[-1]  # Last item since we're looking at past days
+                close_price = float(latest.close)
+                price_type = "previous close" if is_market_open() else "latest close"
+                logger.info(f"✅ Got SPX price from aggregates: {close_price} ({price_type})")
                 
                 # Sanity check - SPX should be between 3000 and 7000
                 if 3000 <= close_price <= 7000:
@@ -109,7 +155,7 @@ def get_spx_price_bulletproof(client: RESTClient, max_retries=5):
             time.sleep(wait_time)
     
     # Ultimate fallback - use a recent known value
-    fallback_price = 5920.0  # Update this periodically
+    fallback_price = 5908.28  # SPX close from 2025-05-28
     logger.warning(f"All SPX price attempts failed. Using fallback: {fallback_price}")
     return fallback_price
 
