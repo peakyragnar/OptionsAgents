@@ -2,7 +2,7 @@ import duckdb, pytest, glob
 
 EXPECTED = {
     "type","strike","expiry","bid","ask","volume",
-    "open_interest","iv","delta","gamma","under_px"
+    "open_interest","iv","delta","gamma","vega","theta","under_px","date"
 }
 
 def test_required_columns_present():
@@ -10,8 +10,10 @@ def test_required_columns_present():
     if not files:
         pytest.skip("no snapshot file available")
     file = files[-1]     # latest snapshot
-    cols = set(r[0] for r in duckdb.query(
-        f"SELECT name FROM parquet_schema('{file}') "
-        "WHERE name <> 'schema'"          # filter out synthetic schema row
-    ).fetchall())
+    
+    # Use read_parquet to get actual columns instead of parquet_schema
+    # which may not show all columns correctly
+    df = duckdb.query(f"SELECT * FROM read_parquet('{file}') LIMIT 0").to_df()
+    cols = set(df.columns)
+    
     assert cols == EXPECTED, f"columns mismatch: {cols.symmetric_difference(EXPECTED)}"

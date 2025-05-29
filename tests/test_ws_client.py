@@ -32,8 +32,16 @@ def setup_test_data():
     quotes.clear()
 
 
-def test_side_from_price(setup_test_data):
+def test_side_from_price(monkeypatch):
     """Test trade side determination from price."""
+    # Use a local quotes dict to avoid interference
+    test_quotes = {
+        "O:SPX240517C04200000": (10.0, 11.0)  # bid, ask
+    }
+    
+    # Monkey patch the quotes.get method
+    monkeypatch.setattr("src.stream.ws_client.quotes", test_quotes)
+    
     # Test buy side (at or above ask)
     assert side_from_price("O:SPX240517C04200000", 11.0) == "buy"
     assert side_from_price("O:SPX240517C04200000", 11.5) == "buy"

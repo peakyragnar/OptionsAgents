@@ -169,6 +169,52 @@ Run the tests to ensure everything is working correctly:
 # Run all tests
 python -m pytest
 
-# Run specific test modules
-python -m pytest tests/test_engine.py
+# Run core system tests only
+python run_core_tests.py
+
+# Quick test suite (bash)
+./pytest.sh
 ```
+
+## System Monitoring
+
+Check system health with the consolidated status script:
+
+```bash
+# Check all system components
+python system_status.py
+
+# Quick monitor (legacy)
+python simple_monitor.py
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **SPX Price Shows Fallback ($5,908.28 or $5,920.00)**
+   - Check Polygon API key is set: `echo $POLYGON_KEY`
+   - Test API directly: `python test_spx_price.py`
+   - Check snapshot logs: `tail /Users/michael/logs/OptionsAgents/components/src.ingest.snapshot_fixed.log`
+
+2. **Snapshots Not Being Created**
+   - Check service status: `launchctl list | grep optionsagents`
+   - Restart snapshot service: `launchctl unload -w ~/Library/LaunchAgents/com.optionsagents.snapshot.plist && launchctl load -w ~/Library/LaunchAgents/com.optionsagents.snapshot.plist`
+   - Check for conflicting services: Make sure `com.optionsagents.ingest.plist.disabled` exists
+
+3. **Test Suite Issues**
+   - For 0DTE options: Tests expect 100-500 strikes, not 450+
+   - For pre-market: Zero open interest is normal and tests will skip
+   - For missing columns: Ensure snapshots include vega, theta, delta, date
+
+4. **Services Showing "NOT RUNNING"**
+   - Snapshot service is scheduled (runs every 60s then exits) - this is normal
+   - Live service should stay running - restart if crashed
+   - Use `python system_status.py` for accurate service status
+
+### Key System Components
+
+- **Snapshot Service**: Runs every 60 seconds via launchd, creates parquet files with 0DTE options
+- **Live Service**: Continuous trading engine processing real-time option trades  
+- **Test Suite**: Organized into core tests (always run) and optional tests
+- **Monitoring**: Multiple scripts available for different detail levels
