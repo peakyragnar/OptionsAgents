@@ -45,11 +45,11 @@ async def run_gamma_tool_sam(engine: GammaEngine, trade_queue: asyncio.Queue):
             
             # Process the trade through Gamma Tool Sam
             if trade:
-                result = engine.process_option_trade(trade)
-                if result:
-                    trades_processed += 1
-                    if trades_processed % 100 == 0:
-                        logger.info(f"Gamma Tool Sam: Processed {trades_processed} trades")
+                # Add trade to the engine's trade processor
+                engine.trade_processor.add_trade(trade)
+                trades_processed += 1
+                if trades_processed % 100 == 0:
+                    logger.info(f"Gamma Tool Sam: Processed {trades_processed} trades")
                         
         except asyncio.TimeoutError:
             # Normal - no trades available

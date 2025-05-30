@@ -340,21 +340,24 @@ def live(
                         from gamma_tool_sam.gamma_engine import GammaEngine
                         gamma_engine = GammaEngine(spx_price=real_spx_price or 5920.0)
                         
-                        # Add SPX price updater
-                        tasks.append(
-                            asyncio.create_task(run_with_error_handling(
-                                update_spx_price_loop(gamma_engine, interval=10),
-                                "SPX Price Updater"
-                            ))
-                        )
+                        # Create wrapper for Gamma Tool Sam
+                        async def run_gamma_tool_sam_with_restart():
+                            """Run Gamma Tool Sam with automatic restart on failure"""
+                            while not killer.kill_now:
+                                try:
+                                    print("🎯 Starting Gamma Tool Sam...")
+                                    await run_gamma_tool_sam(gamma_engine, get_trade_queue())
+                                except asyncio.CancelledError:
+                                    print("🎯 Gamma Tool Sam cancelled")
+                                    break
+                                except Exception as e:
+                                    logger.error(f"Gamma Tool Sam error: {e}", exc_info=True)
+                                    if not killer.kill_now:
+                                        print("🎯 Restarting Gamma Tool Sam in 5 seconds...")
+                                        await asyncio.sleep(5)
                         
-                        # Add Gamma Tool Sam processor
-                        tasks.append(
-                            asyncio.create_task(run_with_error_handling(
-                                run_gamma_tool_sam(gamma_engine, get_trade_queue()),
-                                "Gamma Tool Sam"
-                            ))
-                        )
+                        # Add Gamma Tool Sam task
+                        tasks.append(asyncio.create_task(run_gamma_tool_sam_with_restart()))
                         
                         print("✅ Gamma Tool Sam integration enabled")
                         print("   Dashboard available at: http://localhost:8080")
