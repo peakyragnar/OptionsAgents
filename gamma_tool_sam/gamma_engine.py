@@ -13,6 +13,7 @@ from .core.trade_processor import TradeProcessor
 from .core.gamma_calculator import GammaCalculator
 from .core.position_tracker import PositionTracker
 from .core.change_detector import ChangeDetector
+from .core.confidence_calculator import ConfidenceCalculator, MarketConditions
 
 class GammaEngine:
     """
@@ -26,6 +27,7 @@ class GammaEngine:
         self.gamma_calculator = GammaCalculator()
         self.position_tracker = PositionTracker()
         self.change_detector = ChangeDetector()
+        self.confidence_calculator = ConfidenceCalculator()
         
         # Set initial SPX price if provided
         if spx_price:
@@ -92,6 +94,21 @@ class GammaEngine:
         # Get active alerts
         alerts = self.change_detector.get_active_alerts()
         
+        # Prepare data for confidence calculation
+        analysis_data = {
+            'net_force': net_force,
+            'upward_force': upward_force,
+            'downward_force': downward_force,
+            'direction': 'UP' if net_force > 0 else 'DOWN',
+            'primary_pin': primary_pin,
+            'spx_price': self.gamma_calculator.spx_price,
+            'all_pins': self._format_pins(top_all),
+            'active_alerts': alerts
+        }
+        
+        # Calculate sophisticated confidence
+        confidence, confidence_details = self.confidence_calculator.calculate_confidence(analysis_data)
+        
         # Build analysis
         self.last_analysis = {
             'timestamp': datetime.now(),
@@ -100,7 +117,8 @@ class GammaEngine:
             'upward_force': upward_force,
             'downward_force': downward_force,
             'direction': 'UP' if net_force > 0 else 'DOWN',
-            'confidence': min(abs(net_force) / 1000000, 1.0),
+            'confidence': confidence,
+            'confidence_details': confidence_details,
             'primary_pin': primary_pin,
             'top_upward_pins': self._format_pins(top_upward),
             'top_downward_pins': self._format_pins(top_downward),
@@ -285,9 +303,15 @@ class GammaEngine:
             distance = pin['strike'] - a['spx_price']
             print(f"Primary Target: {pin['strike']} ({distance:+.0f}pts away)")
             
-        # Confidence meter
+        # Confidence meter with details
         conf_bars = int(a['confidence'] * 10)
         print(f"Confidence: {'█' * conf_bars}{'░' * (10 - conf_bars)} {a['confidence']:.0%}")
+        
+        # Show confidence breakdown if available
+        if 'confidence_details' in a:
+            details = a['confidence_details']
+            if 'explanation' in details:
+                print(f"Analysis: {' | '.join(details['explanation'][:3])}")
         
         # Top pins
         print("\nTOP PINS:")
@@ -343,6 +367,7 @@ class GammaEngine:
             'net_force': self.last_analysis['net_force'],
             'direction': self.last_analysis['direction'],
             'confidence': self.last_analysis['confidence'],
+            'confidence_details': self.last_analysis.get('confidence_details', {}),
             'primary_pin': self.last_analysis['primary_pin'],
             'pins': {
                 'upward': self.last_analysis['top_upward_pins'],
@@ -351,4 +376,27 @@ class GammaEngine:
             'alerts': self.last_analysis['active_alerts'],
             'signal': self.last_analysis['signal'],
             'stats': self.last_analysis['stats']
+        }
+    
+    def get_confidence_analysis(self) -> Dict:
+        """Get detailed confidence breakdown"""
+        if not self.last_analysis or 'confidence_details' not in self.last_analysis:
+            return {'error': 'No confidence analysis available'}
+            
+        details = self.last_analysis['confidence_details']
+        components = details.get('components', {})
+        
+        return {
+            'overall_confidence': self.last_analysis['confidence'],
+            'components': {
+                'force': {'score': components.get('force_score', 0), 'weight': 0.30},
+                'imbalance': {'score': components.get('imbalance_score', 0), 'weight': 0.25},
+                'concentration': {'score': components.get('concentration_score', 0), 'weight': 0.20},
+                'distance': {'score': components.get('distance_score', 0), 'weight': 0.15},
+                'momentum': {'score': components.get('momentum_score', 0), 'weight': 0.10}
+            },
+            'patterns': details.get('patterns', []),
+            'explanation': details.get('explanation', []),
+            'market_conditions': details.get('market_conditions', {}),
+            'adjustments': details.get('adjustments', {})
         }

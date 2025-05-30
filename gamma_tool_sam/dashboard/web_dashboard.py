@@ -60,6 +60,14 @@ def get_risk():
         
     return jsonify(gamma_engine.calculate_risk_level())
 
+@app.route('/api/confidence')
+def get_confidence():
+    """Agent API endpoint - detailed confidence analysis"""
+    if not gamma_engine:
+        return jsonify({'error': 'System not initialized'}), 503
+        
+    return jsonify(gamma_engine.get_confidence_analysis())
+
 @app.route('/api/spikes')
 def get_spikes():
     """Agent API endpoint - recent spikes"""
@@ -245,6 +253,7 @@ def create_dashboard_html():
                     <div class="pin-fill" style="width: 0%"></div>
                     <div class="pin-label">Confidence: 0%</div>
                 </div>
+                <div id="confidence-explanation" style="font-size: 12px; margin-top: 5px; color: #888;"></div>
             </div>
             
             <div class="panel">
@@ -324,6 +333,12 @@ def create_dashboard_html():
                     const confidence = Math.round(data.confidence * 100);
                     document.querySelector('#confidence-bar .pin-fill').style.width = `${confidence}%`;
                     document.querySelector('#confidence-bar .pin-label').textContent = `Confidence: ${confidence}%`;
+                    
+                    // Update confidence explanation if available
+                    const explanationEl = document.getElementById('confidence-explanation');
+                    if (data.confidence_details && data.confidence_details.explanation) {
+                        explanationEl.textContent = data.confidence_details.explanation.slice(0, 2).join(' • ');
+                    }
                     
                     // Update trading signal
                     const signal = data.signal;

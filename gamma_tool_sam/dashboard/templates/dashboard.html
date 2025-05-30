@@ -172,6 +172,7 @@
                     <div class="pin-fill" style="width: 0%"></div>
                     <div class="pin-label">Confidence: 0%</div>
                 </div>
+                <div id="confidence-explanation" style="font-size: 12px; margin-top: 5px; color: #888;"></div>
             </div>
             
             <div class="panel">
@@ -251,6 +252,12 @@
                     const confidence = Math.round(data.confidence * 100);
                     document.querySelector('#confidence-bar .pin-fill').style.width = `${confidence}%`;
                     document.querySelector('#confidence-bar .pin-label').textContent = `Confidence: ${confidence}%`;
+                    
+                    // Update confidence explanation if available
+                    const explanationEl = document.getElementById('confidence-explanation');
+                    if (data.confidence_details && data.confidence_details.explanation) {
+                        explanationEl.textContent = data.confidence_details.explanation.slice(0, 2).join(' • ');
+                    }
                     
                     // Update trading signal
                     const signal = data.signal;
