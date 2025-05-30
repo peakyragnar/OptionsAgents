@@ -8,7 +8,7 @@ def _first_dict(msg):
     return msg
 
 _BASE = "https://api.polygon.io/v3/quotes/{}"
-_API_KEY = os.environ["POLYGON_KEY"]
+_API_KEY = os.environ.get("POLYGON_KEY", "")
 
 async def fetch_quote(sess: aiohttp.ClientSession, occ_ticker: str):
     url = _BASE.format(occ_ticker)

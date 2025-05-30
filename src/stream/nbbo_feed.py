@@ -1,6 +1,7 @@
 # ------------------------------------  imports / constants  -------------
 import os, json, logging, threading, time
 from datetime import datetime, timezone
+from websocket import WebSocketTimeoutException
 from .polygon_client import make_ws
 from .quote_cache      import quote_cache
 
@@ -17,34 +18,64 @@ def _handle(msg: dict):
     """Convert Polygon Q-message → quote_cache entry."""
     if msg.get("ev") != "Q":
         return                          # ignore anything that isn't a quote
-
-    q = { _POLY_TO_GENERIC[k]: msg[k] for k in _POLY_TO_GENERIC if k in msg }
-    if "bid" not in q or "ask" not in q:        # incomplete quote
+    
+    # Polygon options quotes have these fields:
+    # bid, ask, bid_size, ask_size OR bp, ap, bs, as
+    bid = msg.get("bid") or msg.get("bp")
+    ask = msg.get("ask") or msg.get("ap") 
+    
+    if not bid or not ask:
+        # Debug first quote to see structure
+        if not hasattr(_handle, '_debug_shown'):
+            print(f"[NBBO] First quote structure: {msg}")
+            _handle._debug_shown = True
         return
-
-    quote_cache.update(symbol = msg["sym"],
-                       ts     = msg["t"],
-                       **q)
+    
+    # Update the quote cache dictionary
+    quote_cache[msg["sym"]] = {
+        "bid": float(bid),
+        "ask": float(ask),
+        "ts": msg.get("t", msg.get("timestamp", 0))
+    }
 
     _LOG.debug("Quote %-22s %7.4f × %7.4f  %s",
-               msg["sym"], q["bid"], q["ask"],
-               datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)
+               msg["sym"], float(bid), float(ask),
+               datetime.fromtimestamp(msg.get("t", 0)/1e3, tz=timezone.utc)
                         .strftime("%H:%M:%S.%f")[:-3])
 
 # ------------------------------------------------------------------------
 WS_URL = "wss://socket.polygon.io/options"
 
 def _run_ws():
-    ws = make_ws(WS_URL)
+    # Don't pass symbols to make_ws to prevent auto-subscription to trades
+    ws = make_ws(WS_URL, symbols=None)
 
     # Subscribe -------------------------------------------------------------
-    ws.send(json.dumps({                       # must arrive <5 s after auth
-        "action": "subscribe",
-        "params": os.getenv("NBBO_SUBS", "Q.*")
-    }))
+    subscription = os.getenv("NBBO_SUBS", "Q.*")
+    symbols = subscription.split(',')
+    print(f"[NBBO] Total symbols to subscribe: {len(symbols)}")
+    
+    # Subscribe in batches of 50 to avoid overwhelming Polygon
+    batch_size = 50
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i+batch_size]
+        batch_subscription = ",".join(batch)
+        
+        subscription_msg = {
+            "action": "subscribe",
+            "params": batch_subscription
+        }
+        
+        print(f"[NBBO] Subscribing batch {i//batch_size + 1}/{(len(symbols)-1)//batch_size + 1} ({len(batch)} symbols)")
+        ws.send(json.dumps(subscription_msg))
+        time.sleep(0.1)  # Small delay between batches
+    
+    _LOG.info(f"Sent all NBBO subscriptions in {(len(symbols)-1)//batch_size + 1} batches")
     
     #  🔑  FIRST KEEP-ALIVE IMMEDIATELY  🔑
     ws.send('{"action":"ping"}')
+    
+    print("[NBBO] Starting message receive loop...")
     
     # ------------------------------------------------------------------ #
     #   Keep-alive: send additional pings every 4 seconds               #
@@ -59,11 +90,14 @@ def _run_ws():
     _keep_alive_thread = threading.Thread(target=_keep_alive, daemon=True)
     _keep_alive_thread.start()
 
-    for raw in ws:                       # each websocket frame
-        if not raw:
-            continue                     # <-- keep this simple guard
-
+    # Use recv() like trade_feed does, not iterator
+    while True:
         try:
+            raw = ws.recv()
+            
+            if not raw:
+                continue
+                
             frames = json.loads(raw)
             if isinstance(frames, dict):
                 frames = [frames]
@@ -77,31 +111,34 @@ def _run_ws():
                     continue
                 # ------------------------------------------------
 
-                if msg.get("ev") != "Q":          # skip anything not NBBO
-                    continue
-
-                # Use the correct Polygon field names
-                quote_cache.update(
-                    symbol   = msg["sym"],
-                    bid      = msg["bp"],          # <-- bp
-                    bid_size = msg["bs"],          # <-- bs
-                    ask      = msg["ap"],          # <-- ap
-                    ask_size = msg["as"],          # <-- as
-                    ts       = msg["t"],
-                )
-                _LOG.debug(
-                    "Quote %-22s %7.2f × %7.2f  %s",
-                    msg["sym"], msg["bp"], msg["ap"],
-                    datetime.fromtimestamp(msg["t"]/1e3, tz=timezone.utc)
-                            .strftime("%H:%M:%S.%f")[:-3],
-                )
+                # Use the _handle function which properly maps fields
+                try:
+                    _handle(msg)
+                except Exception as e:
+                    # Log first error only to avoid spam
+                    if not hasattr(_run_ws, '_error_logged'):
+                        print(f"[NBBO] Error in _handle: {e}")
+                        print(f"[NBBO] Message was: {msg}")
+                        _run_ws._error_logged = True
+        except WebSocketTimeoutException:
+            continue  # Normal timeout, just continue
         except json.JSONDecodeError:
             _LOG.debug("non-JSON frame: %r", raw)
-        except Exception:
-            _LOG.exception("bad quote msg")
+        except Exception as e:
+            _LOG.exception("bad quote msg: %s", e)
+            break  # Exit loop on serious errors
 
 # ------------------------------------------------------------------------
-def run():
+def run(symbols=None):
+    """Run NBBO feed with optional symbol list"""
+    if symbols:
+        # Subscribe to quotes for the specific symbols from snapshot
+        # Format: Q.O:SPXW250530C05900000,Q.O:SPXW250530P05900000,Q.I:SPX
+        quote_symbols = [f"Q.{sym}" for sym in symbols]
+        subscription = ",".join(quote_symbols)
+        os.environ["NBBO_SUBS"] = subscription
+        _LOG.info(f"NBBO subscribing to {len(symbols)} specific symbols from snapshot")
+    
     _LOG.info("starting NBBO websocket…")
     while True:
         try:

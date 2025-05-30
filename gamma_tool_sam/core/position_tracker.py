@@ -18,7 +18,9 @@ class PositionTracker:
     Maintains both in-memory state and persistent storage
     """
     
-    def __init__(self, db_path: str = 'gamma_tool_sam.duckdb'):
+    def __init__(self, db_path: str = 'data/gamma_tool_sam.duckdb'):
+        # Ensure data directory exists
+        os.makedirs('data', exist_ok=True)
         self.db_path = db_path
         self.conn = duckdb.connect(db_path)
         self.positions = defaultdict(lambda: {

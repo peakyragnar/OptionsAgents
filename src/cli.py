@@ -4,8 +4,8 @@ import sys
 import logging
 from dotenv import load_dotenv
 load_dotenv()                    # ← must be before `import stream.quote_cache` etc.
-from src.stream.quote_cache import run as quotes_run
-from src.stream.trade_feed  import run as trades_run, TRADE_Q
+from src.stream.unified_feed import run as unified_run
+from src.stream.shared_queue import get_trade_queue
 from src.dealer.engine      import run as engine_run
 from src.dealer.engine      import _book              # optional inspect
 from src.persistence        import append_gamma
@@ -279,30 +279,56 @@ def live(
                     print("⚠️  Pin detector not available - running without pin detection")
                 
                 # Run the main streaming components with error handling
-                tasks = []
+                print("🚀 Creating async tasks...")
                 
-                async def run_with_error_handling(coro, name):
-                    """Run a coroutine with error handling and restart on failure"""
+                # Simple task creation with single error handling layer
+                async def run_unified_with_restart():
+                    """Run unified feed with automatic restart on failure"""
                     while not killer.kill_now:
                         try:
-                            logger.info(f"Starting {name}...")
-                            await coro
+                            print("📡 Starting Unified Feed...")
+                            await unified_run(symbols)
                         except asyncio.CancelledError:
-                            logger.info(f"{name} cancelled")
+                            print("📡 Unified Feed cancelled")
                             break
                         except Exception as e:
-                            logger.error(f"Error in {name}: {e}", exc_info=True)
+                            logger.error(f"Unified Feed error: {e}", exc_info=True)
                             if not killer.kill_now:
-                                logger.info(f"Restarting {name} in 5 seconds...")
+                                print("📡 Restarting Unified Feed in 5 seconds...")
                                 await asyncio.sleep(5)
-                            else:
-                                break
                 
-                tasks = [
-                    asyncio.create_task(run_with_error_handling(quotes_run(), "Quote Cache")),
-                    asyncio.create_task(run_with_error_handling(trades_run(symbols), "Trade Feed")),
-                    asyncio.create_task(run_with_error_handling(engine_run(append_gamma), "Dealer Engine"))
-                ]
+                async def run_engine_with_restart():
+                    """Run dealer engine with automatic restart on failure"""
+                    print("⚙️ DEALER ENGINE WRAPPER STARTED", flush=True)
+                    while not killer.kill_now:
+                        try:
+                            print("⚙️ Starting Dealer Engine...", flush=True)
+                            await engine_run(append_gamma, eps=0.05, snapshot_interval=1.0)
+                        except asyncio.CancelledError:
+                            print("⚙️ Dealer Engine cancelled", flush=True)
+                            break
+                        except Exception as e:
+                            logger.error(f"Dealer Engine error: {e}", exc_info=True)
+                            print(f"⚙️ Dealer Engine crashed: {e}", flush=True)
+                            if not killer.kill_now:
+                                print("⚙️ Restarting Dealer Engine in 5 seconds...", flush=True)
+                                await asyncio.sleep(5)
+                
+                # Create tasks
+                print("🚀 Creating tasks...")
+                
+                # Start dealer engine FIRST (it's more lightweight)
+                engine_task = asyncio.create_task(run_engine_with_restart())
+                print("✅ Created dealer engine task")
+                
+                # Small yield to let engine task start
+                await asyncio.sleep(0.01)
+                
+                # Then start unified feed
+                unified_task = asyncio.create_task(run_unified_with_restart())
+                print("✅ Created unified feed task")
+                
+                tasks = [engine_task, unified_task]
                 
                 # Add Gamma Tool Sam if requested
                 if gamma_tool_sam:
@@ -325,7 +351,7 @@ def live(
                         # Add Gamma Tool Sam processor
                         tasks.append(
                             asyncio.create_task(run_with_error_handling(
-                                run_gamma_tool_sam(gamma_engine, TRADE_Q),
+                                run_gamma_tool_sam(gamma_engine, get_trade_queue()),
                                 "Gamma Tool Sam"
                             ))
                         )
@@ -408,7 +434,7 @@ def replay(parquet: pathlib.Path):
         async def feeder():
             print(f"Starting trade feed with {len(df)} trades")
             for i, rec in enumerate(df.to_dict("records")):
-                await TRADE_Q.put(rec)
+                await get_trade_queue().put(rec)
                 if i % 10 == 0:  # Status update every 10 trades
                     print(f"Fed {i}/{len(df)} trades into queue")
                 await asyncio.sleep(0.01)  # Slightly longer delay to ensure processing

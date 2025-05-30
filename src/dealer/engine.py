@@ -17,7 +17,7 @@ import logging
 from typing import Callable
 
 from src.utils.logging_config import setup_application_logging, setup_component_logger
-from src.stream.trade_feed import TRADE_Q
+from src.stream.shared_queue import get_trade_queue
 from src.stream.quote_cache import quotes            # live NBBO cache
 from src.greeks.surface import VolSurface
 
@@ -35,6 +35,9 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
     """Classify aggressor side, compute γ, update book.
     Ignore status/heartbeat frames that have no trade fields.
     """
+    # Debug: log what we received
+    print(f"[engine] _process_trade received: {msg}", flush=True)
+    
     # Handle status messages - skip them entirely
     if "status" in msg:
         print(f"[engine] Skipping status message: {msg.get('status')} - {msg.get('message', '')}")
@@ -72,10 +75,24 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
             print(f"[engine] Skipping message with event type '{msg.get('ev')}', fields: {msg.keys()}")
             return
     
+    # Handle different field naming conventions
+    if "price" in msg and "size" in msg:
+        # Map field names from trade feed format to expected format
+        msg["p"] = msg["price"]
+        msg["s"] = msg["size"]
+        # Convert timestamp to nanoseconds if needed
+        ts = msg.get("timestamp", msg.get("ts", 0))
+        if isinstance(ts, float) and ts < 1e10:  # Timestamp in seconds
+            msg["t"] = int(ts * 1e9)  # Convert to nanoseconds
+        else:
+            msg["t"] = ts
+        print(f"[engine] Mapped trade fields: {msg['sym']} {msg['s']}@{msg['p']}")
+    
     # Verify we have all required fields
     if not {"sym", "p", "s", "t"}.issubset(msg):
         # Debug print to see what fields we received
         print(f"[engine] Incomplete trade message, fields: {msg.keys()}")
+        print(f"[engine] Message content: {msg}")
         return
 
     sym = msg["sym"]
@@ -83,10 +100,21 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
     size = int(msg["s"])
 
     # Check if we have NBBO for this symbol
-    bid, ask, _ = quotes.get(sym, (None, None, None))
-    if bid is None:
+    quote = quotes.get(sym, {})
+    if isinstance(quote, dict):
+        bid = quote.get("bid")
+        ask = quote.get("ask")
+    else:
+        # Legacy tuple format
+        bid, ask, _ = quote if quote else (None, None, None)
+    
+    if bid is None or ask is None:
         print(f"[engine] No NBBO for {sym}")
         return
+    
+    # Ensure bid/ask are floats
+    bid = float(bid)
+    ask = float(ask)
 
     # Classify trade as BUY or SELL based on price relative to NBBO
     if price >= ask - eps:
@@ -104,7 +132,12 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
         occ = parse_occ(sym)
         
         # Calculate time to expiry properly
-        trade_d = dt.datetime.utcfromtimestamp(msg["t"] / 1e9).date()
+        # Handle timestamp in different formats
+        timestamp = msg.get("t", msg.get("timestamp", 0))
+        if timestamp > 1e10:  # Nanoseconds
+            trade_d = dt.datetime.utcfromtimestamp(timestamp / 1e9).date()
+        else:  # Seconds
+            trade_d = dt.datetime.utcfromtimestamp(timestamp).date()
         tau_days = (occ.expiry - trade_d).days
         tau = max(tau_days / 365.0, 1/365.0)  # Ensure minimum time to expiry
         
@@ -112,8 +145,23 @@ async def _process_trade(msg: dict, *, eps: float) -> None:
             print(f"[engine] Option expired: {occ.expiry} <= {trade_d}")
             return
 
-        # Get current SPX price (hard-coded for now, should fetch from real-time feed)
-        spx_price = 5000  # Replace with actual SPX price lookup
+        # Get current SPX price from quote cache
+        spx_quote = quotes.get("I:SPX", {})
+        if isinstance(spx_quote, dict):
+            spx_bid = spx_quote.get("bid")
+            spx_ask = spx_quote.get("ask")
+            if spx_bid and spx_ask:
+                spx_price = (float(spx_bid) + float(spx_ask)) / 2
+            else:
+                spx_price = 5875  # Fallback
+                print(f"[engine] Warning: No SPX quote available, using fallback price {spx_price}")
+        else:
+            # Legacy tuple format
+            if spx_quote and spx_quote[0] is not None and spx_quote[1] is not None:
+                spx_price = (float(spx_quote[0]) + float(spx_quote[1])) / 2
+            else:
+                spx_price = 5875
+                print(f"[engine] Warning: No SPX quote available, using fallback price {spx_price}")
         
         # Calculate mid price for IV calculation and Greeks
         mid = (bid + ask) * 0.5
@@ -150,15 +198,43 @@ async def run(snapshot_cb: Callable[[float, float], None], *,
     """
     snapshot_cb(ts: float, total_gamma: float)  called every `snapshot_interval` seconds.
     """
+    print(f"[engine] 🚀 DEALER ENGINE STARTED! eps={eps}, snapshot_interval={snapshot_interval}", flush=True)
+    print(f"[engine] Callback function: {snapshot_cb.__name__}", flush=True)
+    trade_queue = get_trade_queue()
+    print(f"[engine] Got trade queue: {id(trade_queue)} in event loop: {id(asyncio.get_event_loop())}", flush=True)
+    print(f"[engine] Initial queue size: {trade_queue.qsize()}", flush=True)
+    logger.info(f"Dealer engine started with queue size: {trade_queue.qsize()}")
     last = time.time()
+    trade_count = 0
+    
+    print(f"[engine] Entering main loop...", flush=True)
+    loop_count = 0
     while True:
+        loop_count += 1
+        if loop_count <= 5 or loop_count % 100 == 0:
+            print(f"[engine] Loop iteration {loop_count}, queue size: {trade_queue.qsize()}", flush=True)
+        
         try:
-            msg = await asyncio.wait_for(TRADE_Q.get(), timeout=0.2)
+            # Debug: check queue periodically
+            if trade_count % 100 == 0:
+                print(f"[engine] Queue check: {trade_queue.qsize()} items, processed {trade_count} trades", flush=True)
+            msg = await asyncio.wait_for(trade_queue.get(), timeout=0.2)
+            trade_count += 1
+            print(f"[engine] Got trade #{trade_count} from queue: {msg}", flush=True)
+            if trade_count % 10 == 0:
+                print(f"[engine] Processed {trade_count} trades, current gamma: {_book.total_gamma()}", flush=True)
             await _process_trade(msg, eps=eps)
         except asyncio.TimeoutError:
-            pass
+            if loop_count % 50 == 0:
+                print(f"[engine] Timeout waiting for trades, continuing...", flush=True)
 
         now = time.time()
         if now - last >= snapshot_interval:
-            snapshot_cb(now, _book.total_gamma())
+            gamma = _book.total_gamma()
+            print(f"[engine] Snapshot: gamma={gamma}, trades={trade_count}", flush=True)
+            try:
+                snapshot_cb(now, gamma)
+                print(f"[engine] Snapshot callback completed", flush=True)
+            except Exception as e:
+                print(f"[engine] ERROR in snapshot callback: {type(e).__name__}: {e}", flush=True)
             last = now

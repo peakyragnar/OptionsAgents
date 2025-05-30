@@ -45,7 +45,7 @@ async def run_gamma_tool_sam(engine: GammaEngine, trade_queue: asyncio.Queue):
             
             # Process the trade through Gamma Tool Sam
             if trade:
-                result = engine.process_trade(trade)
+                result = engine.process_option_trade(trade)
                 if result:
                     trades_processed += 1
                     if trades_processed % 100 == 0:
