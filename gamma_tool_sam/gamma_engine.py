@@ -141,14 +141,14 @@ class GammaEngine:
         target = primary_pin['strike']
         distance = target - spx
         
-        # Determine action based on net force and distance
-        if abs(net_force) < 100000:  # Low conviction
-            return {
-                'action': 'WAIT',
-                'reason': 'Low gamma concentration',
-                'confidence': 0.3
-            }
+        # Get dynamic threshold based on time of day
+        threshold = self._get_dynamic_threshold()
+        
+        # Check for low gamma / balanced scenario for premium selling
+        if abs(net_force) < threshold:
+            return self._generate_premium_signal(net_force, spx, primary_pin)
             
+        # High gamma - directional trades
         if net_force > 0:  # Upward pressure
             if distance > 0 and distance < 20:  # Target above, reasonable distance
                 return {
@@ -157,7 +157,8 @@ class GammaEngine:
                     'target': target,
                     'stop': spx - 5,
                     'reason': f'Strong upward pin at {target}',
-                    'confidence': min(abs(net_force) / 500000, 0.9)
+                    'confidence': min(abs(net_force) / (threshold * 5), 0.9),
+                    'execution': 'Buy SPX or calls, sell at target'
                 }
         else:  # Downward pressure
             if distance < 0 and distance > -20:  # Target below, reasonable distance
@@ -167,7 +168,8 @@ class GammaEngine:
                     'target': target,
                     'stop': spx + 5,
                     'reason': f'Strong downward pin at {target}',
-                    'confidence': min(abs(net_force) / 500000, 0.9)
+                    'confidence': min(abs(net_force) / (threshold * 5), 0.9),
+                    'execution': 'Buy puts or short SPX, cover at target'
                 }
                 
         return {
@@ -195,13 +197,24 @@ class GammaEngine:
         """Format alerts for output"""
         formatted = []
         for alert in alerts[:10]:  # Limit to 10 most recent
+            # Determine direction for pins based on strike vs SPX
+            direction = None
+            if alert.change_type in ['NEW_PIN', 'SPIKE'] and alert.strike and self.gamma_calculator.spx_price:
+                if alert.strike > self.gamma_calculator.spx_price:
+                    direction = 'UPWARD'  # Calls above SPX
+                elif alert.strike < self.gamma_calculator.spx_price:
+                    direction = 'DOWNWARD'  # Puts below SPX
+                else:
+                    direction = 'NEUTRAL'  # ATM
+                    
             formatted.append({
                 'timestamp': alert.timestamp.isoformat(),
                 'type': alert.change_type,
                 'strike': alert.strike,
                 'magnitude': alert.magnitude,
                 'severity': alert.severity,
-                'details': alert.details
+                'details': alert.details,
+                'direction': direction  # Add directional implication
             })
         return formatted
         
@@ -336,12 +349,22 @@ class GammaEngine:
             for alert in a['active_alerts'][:5]:
                 icon = {'CRITICAL': '🚨', 'HIGH': '⚠️', 'MEDIUM': '📊'}.get(alert['severity'], 'ℹ️')
                 
+                # Add direction arrow if available
+                direction_symbol = ''
+                if alert.get('direction'):
+                    if alert['direction'] == 'UPWARD':
+                        direction_symbol = ' ↑'
+                    elif alert['direction'] == 'DOWNWARD':
+                        direction_symbol = ' ↓'
+                    else:
+                        direction_symbol = ' ↔'
+                
                 if alert['type'] == 'SPIKE':
-                    print(f"{icon} SPIKE: {alert['details']['volume']}x {alert['strike']}{alert['details']['option_type'][0]} @ {datetime.fromisoformat(alert['timestamp']).strftime('%H:%M')} (+{alert['details']['gamma_added']:,.0f})")
+                    print(f"{icon} SPIKE: {alert['details']['volume']}x {alert['strike']}{alert['details']['option_type'][0]} @ {datetime.fromisoformat(alert['timestamp']).strftime('%H:%M')} (+{alert['details']['gamma_added']:,.0f}){direction_symbol}")
                 elif alert['type'] == 'DIRECTION_FLIP':
                     print(f"{icon} DIRECTION FLIP: {alert['details']['from']} → {alert['details']['to']}")
                 elif alert['type'] == 'NEW_PIN':
-                    print(f"{icon} NEW PIN: {alert['strike']} growing rapidly ({alert['magnitude']:.1f}x)")
+                    print(f"{icon} NEW PIN: {alert['strike']} growing rapidly ({alert['magnitude']:.1f}x){direction_symbol}")
                     
         # Trading signal
         signal = a['signal']
@@ -399,4 +422,105 @@ class GammaEngine:
             'explanation': details.get('explanation', []),
             'market_conditions': details.get('market_conditions', {}),
             'adjustments': details.get('adjustments', {})
+        }
+        
+    def _get_dynamic_threshold(self) -> float:
+        """Get dynamic gamma threshold based on time of day"""
+        now = datetime.now()
+        hour = now.hour
+        minute = now.minute
+        time_minutes = hour * 60 + minute
+        
+        # Market hours: 9:30 AM - 4:00 PM ET
+        # Time-based thresholds
+        if time_minutes < 600:  # Before 10:00 AM (9:30-10:00)
+            return 25000  # Very low threshold - morning positioning
+        elif time_minutes < 660:  # 10:00-11:00 AM
+            return 75000  # Building positions
+        elif time_minutes < 840:  # 11:00 AM - 2:00 PM
+            return 150000  # Peak trading hours
+        elif time_minutes < 930:  # 2:00-3:30 PM
+            return 250000  # Heavy positioning
+        else:  # 3:30-4:00 PM
+            return 400000  # End of day - massive gamma needed
+            
+    def _generate_premium_signal(self, net_force: float, spx: float, primary_pin: Optional[Dict]) -> Dict:
+        """Generate premium selling signals for low gamma scenarios"""
+        # Get all pins for range calculation
+        all_pins = self.position_tracker.get_top_pins(n=10)
+        
+        if all_pins.empty:
+            return {
+                'action': 'WAIT',
+                'reason': 'No pins established yet',
+                'confidence': 0.2
+            }
+            
+        # Calculate expected range based on pin locations
+        upward_pins = all_pins[all_pins['direction'] == 'UPWARD']
+        downward_pins = all_pins[all_pins['direction'] == 'DOWNWARD']
+        
+        # Find range boundaries
+        if not upward_pins.empty and not downward_pins.empty:
+            upper_bound = int(upward_pins.iloc[0]['strike'])
+            lower_bound = int(downward_pins.iloc[0]['strike'])
+            
+            # Calculate range width
+            range_width = upper_bound - lower_bound
+            
+            # Determine strategy based on conditions
+            if abs(net_force) < 10000:  # Very low gamma - sell straddle
+                return {
+                    'action': 'SELL_STRADDLE',
+                    'entry': spx,
+                    'strikes': {'atm': int(round(spx / 5) * 5)},
+                    'upper_bound': upper_bound,
+                    'lower_bound': lower_bound,
+                    'reason': 'Extremely low gamma - expecting minimal movement',
+                    'confidence': 0.7,
+                    'execution': f'Sell ATM straddle at {int(round(spx / 5) * 5)}, manage at range boundaries'
+                }
+            elif range_width <= 20 and abs(net_force) < 50000:  # Tight range - iron condor
+                # Set strikes outside the pin range
+                call_short = upper_bound + 5
+                call_long = call_short + 10
+                put_short = lower_bound - 5
+                put_long = put_short - 10
+                
+                return {
+                    'action': 'SELL_IRON_CONDOR',
+                    'entry': spx,
+                    'strikes': {
+                        'call_short': call_short,
+                        'call_long': call_long,
+                        'put_short': put_short,
+                        'put_long': put_long
+                    },
+                    'upper_bound': upper_bound,
+                    'lower_bound': lower_bound,
+                    'reason': f'Range-bound between {lower_bound}-{upper_bound}',
+                    'confidence': 0.65,
+                    'execution': f'Sell iron condor: {put_short}/{put_long} puts, {call_short}/{call_long} calls'
+                }
+            elif primary_pin and abs(primary_pin['strike'] - spx) < 10:  # Near strong pin - butterfly
+                center = primary_pin['strike']
+                return {
+                    'action': 'SELL_BUTTERFLY',
+                    'entry': spx,
+                    'strikes': {
+                        'lower': center - 10,
+                        'center': center,
+                        'upper': center + 10
+                    },
+                    'target': center,
+                    'reason': f'Pin magnetism at {center}',
+                    'confidence': 0.6,
+                    'execution': f'Sell butterfly centered at {center}'
+                }
+                
+        # Default to waiting if no clear premium setup
+        return {
+            'action': 'WAIT',
+            'reason': 'Low gamma but no clear premium selling setup',
+            'confidence': 0.3
         }

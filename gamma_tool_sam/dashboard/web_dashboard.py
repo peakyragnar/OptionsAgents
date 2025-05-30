@@ -160,12 +160,18 @@ def create_dashboard_html():
             transition: width 0.3s ease;
         }
         
+        .pin-fill.downward {
+            background-color: #ff0066;  /* Red for downward pins */
+        }
+        
         .pin-label {
             position: absolute;
             left: 5px;
             top: 2px;
             font-size: 12px;
-            color: #fff;
+            color: #fff;  /* White text for better contrast */
+            font-weight: bold;
+            text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);  /* Dark outline for readability */
         }
         
         .alert {
@@ -345,10 +351,10 @@ def create_dashboard_html():
                     const signalElement = document.getElementById('trading-signal');
                     if (signal.action === 'LONG') {
                         signalElement.className = 'signal long';
-                        signalElement.innerHTML = `LONG → ${signal.target}<br>Stop: ${signal.stop}`;
+                        signalElement.innerHTML = `LONG → ${signal.target}<br>Stop: ${signal.stop}<br><small>Buy SPX/Calls</small>`;
                     } else if (signal.action === 'SHORT') {
                         signalElement.className = 'signal short';
-                        signalElement.innerHTML = `SHORT → ${signal.target}<br>Stop: ${signal.stop}`;
+                        signalElement.innerHTML = `SHORT → ${signal.target}<br>Stop: ${signal.stop}<br><small>Buy Puts/Short SPX</small>`;
                     } else {
                         signalElement.className = 'signal wait';
                         signalElement.innerHTML = `WAIT<br>${signal.reason}`;
@@ -382,13 +388,15 @@ def create_dashboard_html():
             const container = document.getElementById(elementId);
             container.innerHTML = '';
             
+            const isDownward = elementId === 'downward-pins';
+            
             pins.forEach(pin => {
                 const maxForce = 1000000; // 1M for scaling
                 const width = Math.min((pin.force / maxForce) * 100, 100);
                 
                 const pinHtml = `
                     <div class="pin-bar">
-                        <div class="pin-fill" style="width: ${width}%"></div>
+                        <div class="pin-fill ${isDownward ? 'downward' : ''}" style="width: ${width}%"></div>
                         <div class="pin-label">${pin.strike}: ${formatNumber(pin.force)}</div>
                     </div>
                 `;
@@ -402,11 +410,28 @@ def create_dashboard_html():
             
             alerts.slice(0, 5).forEach(alert => {
                 const severity = alert.severity.toLowerCase();
+                let directionSymbol = '';
+                let directionClass = '';
+                
+                // Add direction symbols for pins and spikes
+                if (alert.direction) {
+                    if (alert.direction === 'UPWARD') {
+                        directionSymbol = ' ↑';
+                        directionClass = ' upward';
+                    } else if (alert.direction === 'DOWNWARD') {
+                        directionSymbol = ' ↓';
+                        directionClass = ' downward';
+                    } else {
+                        directionSymbol = ' ↔';
+                        directionClass = '';
+                    }
+                }
+                
                 const alertHtml = `
-                    <div class="alert ${severity}">
+                    <div class="alert ${severity}${directionClass}">
                         ${alert.type}: ${alert.details.volume || ''}x 
                         ${alert.strike || ''} 
-                        @ ${new Date(alert.timestamp).toLocaleTimeString()}
+                        @ ${new Date(alert.timestamp).toLocaleTimeString()}${directionSymbol}
                     </div>
                 `;
                 container.innerHTML += alertHtml;

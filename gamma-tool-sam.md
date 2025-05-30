@@ -72,6 +72,12 @@ WebSocket Trade Feed → Trade Processor → Gamma Calculator → Change Detecto
 - Alert prioritization
 - Signal generation
 
+### 6. Confidence Calculator (`confidence_calculator.py`)
+- Multi-factor confidence scoring system
+- Market condition adaptation
+- Pattern recognition and adjustments
+- Transparent explanations for every score
+
 ## Database Architecture
 
 ### Storage Strategy
@@ -141,6 +147,196 @@ data/gamma_tool_sam/
 - **LIVE (< 1 hour)**: DuckDB tables for sub-second queries
 - **RECENT (today)**: DuckDB + Parquet for dual access
 - **HISTORICAL (> 1 day)**: Parquet only for efficient storage
+
+## Sophisticated Confidence Calculation System
+
+The confidence system provides nuanced, explainable confidence scores that adapt to market conditions and learn from patterns.
+
+### Multi-Factor Confidence Model
+
+The confidence score combines five weighted components:
+
+#### 1. **Force Score (30% weight)**
+- Measures the magnitude of net directional gamma force
+- Normalized against dynamic thresholds that adjust for:
+  - Time of day (morning = lower threshold, afternoon = higher)
+  - Market volatility (high VIX = higher threshold needed)
+  - Volume percentile (high volume = more significant moves)
+
+#### 2. **Imbalance Score (25% weight)**
+- Measures how one-sided the gamma positioning is
+- Formula: `|upward_force - downward_force| / total_force`
+- Higher imbalance = stronger directional conviction
+- Balanced gamma (score near 0) indicates uncertainty
+
+#### 3. **Concentration Score (20% weight)**
+- Measures if gamma is concentrated at few strikes or spread out
+- Calculates: top 3 strikes gamma / total gamma
+- High concentration = clearer pin targets
+- Dispersed gamma = less confident directional bias
+
+#### 4. **Distance Score (15% weight)**
+- Measures proximity of primary pin to current SPX price
+- Closer pins have stronger magnetic effect
+- Score decreases linearly: 50 points away = 0 confidence
+- Formula: `max(0, 1 - (distance / 50))`
+
+#### 5. **Momentum Score (10% weight)**
+- Assesses if recent activity aligns with gamma direction
+- Checks for momentum shifts in last 5 minutes
+- Aligned momentum = 0.9 score
+- Opposing momentum = 0.3 score
+- Neutral = 0.6 score
+
+### Pattern Recognition Adjustments
+
+The system detects and adjusts confidence based on market patterns:
+
+#### **Pin Sandwich** (+20% confidence)
+- Strong pin with weaker pins on adjacent strikes
+- Clear target with less competition
+- Indicates focused dealer positioning
+
+#### **Near Gamma Flip** (-20% confidence)
+- Net force close to zero relative to total gamma
+- Market at inflection point
+- Direction could change quickly
+
+#### **Competing Pins** (-30% confidence)
+- Multiple strong pins within 30% strength of each other
+- Conflicting forces reduce directional clarity
+- Market may oscillate between levels
+
+#### **Momentum Divergence** (-40% confidence)
+- Recent direction flips detected
+- Price action not aligned with gamma forces
+- Indicates potential regime change
+
+#### **Volume Surge** (+10% confidence)
+- Multiple recent spikes (3+ in 5 minutes)
+- Increased activity confirms positioning
+- Higher conviction in gamma levels
+
+### Gamma Quality Scoring
+
+Not all gamma is equal. The system assesses quality based on:
+
+#### **Volume Backed (40% weight)**
+- Gamma from actual traded volume vs theoretical
+- High volume = real positioning
+- Low volume = potentially stale
+
+#### **Recent (30% weight)**
+- Gamma from trades in last 30 minutes
+- Fresh positioning more relevant than old
+- Decays over 2-hour window
+
+#### **Institutional (20% weight)**
+- Large block trades indicate institutional activity
+- Average trade size > 100 contracts = institutional
+- Small trades may be retail noise
+
+#### **Persistent (10% weight)**
+- Steady building vs sudden spikes
+- Persistent growth = sustainable pin
+- Spike-only = potentially temporary
+
+### Market Condition Adaptations
+
+#### **Time of Day Adjustments**
+- **9:30-10:30 AM**: Lower thresholds (×0.8) - positioning period
+- **10:30-3:30 PM**: Normal thresholds - steady trading
+- **3:30-4:00 PM**: Higher thresholds (×1.5) - position squaring
+
+#### **Volatility Adjustments**
+- **VIX < 12**: Lower thresholds (×0.8) - calm markets
+- **VIX 12-20**: Normal thresholds
+- **VIX > 20**: Higher thresholds (×1.3) - need more conviction
+
+#### **Volume Percentile Adjustments**
+- **> 80th percentile**: Lower thresholds (×0.9) - significant day
+- **20th-80th percentile**: Normal thresholds
+- **< 20th percentile**: Higher thresholds (×1.2) - quiet day
+
+### Confidence Interpretation
+
+#### **80-100% Confidence**
+- Strong directional signal
+- Clear pin targets with aligned forces
+- High conviction for directional trades
+- Tight stops can be used
+
+#### **60-80% Confidence**
+- Moderate directional bias
+- Some conflicting signals but net direction clear
+- Normal position sizing appropriate
+- Standard stops recommended
+
+#### **40-60% Confidence**
+- Weak directional signal
+- Mixed forces or unclear patterns
+- Reduced position size or avoid trading
+- Wide stops if trading
+
+#### **0-40% Confidence**
+- No clear direction
+- Conflicting forces or patterns
+- Avoid directional trades
+- Wait for clarity
+
+### API Access to Confidence Details
+
+```python
+GET /api/confidence
+Response: {
+    "overall_confidence": 0.82,
+    "components": {
+        "force": {"score": 0.9, "weight": 0.30},
+        "imbalance": {"score": 0.8, "weight": 0.25},
+        "concentration": {"score": 0.75, "weight": 0.20},
+        "distance": {"score": 0.7, "weight": 0.15},
+        "momentum": {"score": 0.6, "weight": 0.10}
+    },
+    "patterns": ["pin_sandwich", "volume_surge"],
+    "explanation": [
+        "Strong directional gamma force",
+        "Heavily one-sided gamma",
+        "Clear pin formation with weak neighbors",
+        "HIGH CONFIDENCE setup"
+    ],
+    "market_conditions": {
+        "time": "10:45",
+        "vix": 15.0,
+        "volume_percentile": 65
+    },
+    "adjustments": {
+        "base": 0.76,
+        "pattern_adjusted": 0.82,
+        "quality_adjusted": 0.82,
+        "final": 0.82
+    }
+}
+```
+
+### Self-Learning Capability
+
+The system includes a `record_outcome()` method to track prediction accuracy:
+
+```python
+# After market close, record if prediction was correct
+confidence_calculator.record_outcome({
+    'confidence': 0.82,
+    'direction': 'UP',
+    'patterns': ['pin_sandwich'],
+    'outcome': 'correct'  # or 'incorrect'
+})
+```
+
+Over time, this allows the system to:
+- Calibrate confidence scores to actual success rates
+- Identify which patterns are most predictive
+- Adjust component weights based on performance
+- Improve accuracy through experience
 
 ## Output Specifications
 
@@ -231,6 +427,47 @@ Body: {"events": ["SPIKE", "DIRECTION_FLIP"], "webhook": "https://..."}
 4. Performance analytics
 5. Risk management layers
 
+## Dynamic Gamma Thresholds
+
+Gamma Tool Sam uses dynamic thresholds that adjust throughout the trading day to account for natural market rhythms:
+
+### Time-Based Thresholds
+- **9:30-10:00 AM**: 25K threshold - Morning positioning period, high sensitivity
+- **10:00-11:00 AM**: 75K threshold - Positions building, moderate sensitivity  
+- **11:00-2:00 PM**: 150K threshold - Peak trading hours, normal sensitivity
+- **2:00-3:30 PM**: 250K threshold - Heavy positioning, reduced sensitivity
+- **3:30-4:00 PM**: 400K threshold - End of day, only massive gamma matters
+
+### Premium Selling Strategies
+
+When gamma is below the dynamic threshold, the system identifies premium selling opportunities:
+
+#### **SELL_STRADDLE** (Net gamma < 10K)
+- Extremely low gamma indicates minimal movement expected
+- Sell ATM straddle at nearest strike
+- Manage at identified range boundaries
+- Highest risk/reward for quiet markets
+
+#### **SELL_IRON_CONDOR** (Range width ≤ 20 points, gamma < 50K)  
+- Tight range between upward and downward pins
+- Sell wings outside the pin range (5 points buffer)
+- Lower risk than straddle with defined max loss
+- Ideal for range-bound markets
+
+#### **SELL_BUTTERFLY** (Near strong pin, distance < 10 points)
+- Pin magnetism expected to hold price
+- Center butterfly on the pin strike
+- 10-point wings for risk management
+- Best for pin-to-pin movement expectations
+
+### Signal Confidence Adjustments
+
+Confidence scores now use dynamic thresholds:
+- Force relative to time-appropriate threshold
+- Morning setups need less absolute gamma
+- Afternoon setups need more conviction
+- End-of-day requires extreme positioning
+
 ## Usage Examples
 
 ### Manual Trading
@@ -266,6 +503,8 @@ client.subscribe(events=['SPIKE', 'DIRECTION_FLIP'],
 - Dashboard refresh every 1 second
 - API response time < 50ms
 - Handle 1000+ trades per minute
+- Dynamic threshold calculation < 10ms
+- Premium strategy evaluation < 20ms
 
 ## Risk Considerations
 
@@ -274,6 +513,8 @@ client.subscribe(events=['SPIKE', 'DIRECTION_FLIP'],
 3. **Market Conditions**: Best in normal volatility environments
 4. **Technology**: Requires stable WebSocket connections
 5. **Latency**: Every millisecond matters for signals
+6. **Dynamic Thresholds**: Time-based adjustments may need calibration
+7. **Premium Selling**: Requires careful risk management and position sizing
 
 ## Success Metrics
 

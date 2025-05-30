@@ -138,38 +138,41 @@ class ConfidenceCalculator:
         )
         
     def _get_force_threshold(self, conditions: MarketConditions) -> float:
-        """Dynamic threshold based on market conditions"""
-        base_threshold = 1000000
-        
-        # Time of day adjustment
+        """Dynamic threshold based on market conditions - matches gamma_engine thresholds"""
+        # Get time in minutes since midnight
         hour = int(conditions.time.split(':')[0])
         minute = int(conditions.time.split(':')[1])
         time_minutes = hour * 60 + minute
         
-        if time_minutes < 630:  # Before 10:30 AM
-            time_multiplier = 0.8  # Lower threshold, more sensitive
-        elif time_minutes > 930:  # After 3:30 PM
-            time_multiplier = 1.5  # Higher threshold needed
-        else:
-            time_multiplier = 1.0
+        # Base thresholds matching gamma_engine
+        if time_minutes < 600:  # Before 10:00 AM (9:30-10:00)
+            base_threshold = 25000  # Very low threshold - morning positioning
+        elif time_minutes < 660:  # 10:00-11:00 AM
+            base_threshold = 75000  # Building positions
+        elif time_minutes < 840:  # 11:00 AM - 2:00 PM
+            base_threshold = 150000  # Peak trading hours
+        elif time_minutes < 930:  # 2:00-3:30 PM
+            base_threshold = 250000  # Heavy positioning
+        else:  # 3:30-4:00 PM
+            base_threshold = 400000  # End of day - massive gamma needed
             
-        # Volatility adjustment
+        # Volatility adjustment (more subtle than before)
         if conditions.vix > 20:
-            vix_multiplier = 1.3
+            vix_multiplier = 1.2  # Reduced from 1.3
         elif conditions.vix < 12:
-            vix_multiplier = 0.8
+            vix_multiplier = 0.9  # Reduced from 0.8
         else:
             vix_multiplier = 1.0
             
-        # Volume adjustment
+        # Volume adjustment (more subtle)
         if conditions.volume_percentile > 80:
-            volume_multiplier = 0.9  # High volume = more significant
+            volume_multiplier = 0.95  # High volume = slightly more significant
         elif conditions.volume_percentile < 20:
-            volume_multiplier = 1.2  # Low volume = need more conviction
+            volume_multiplier = 1.1  # Low volume = need slightly more conviction
         else:
             volume_multiplier = 1.0
             
-        return base_threshold * time_multiplier * vix_multiplier * volume_multiplier
+        return base_threshold * vix_multiplier * volume_multiplier
         
     def _calculate_concentration(self, data: Dict) -> float:
         """Calculate how concentrated gamma is at top strikes"""
