@@ -16,3 +16,5 @@ aiohttp>=3.9.0
 typer>=0.9.0
 rich>=13.7.0        # Typer pretty help output
 psutil>=5.9.0
+flask>=3.0.0
+flask-cors>=4.0.0
