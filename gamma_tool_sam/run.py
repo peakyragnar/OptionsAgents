@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from gamma_tool_sam.gamma_engine import GammaEngine
+from gamma_tool_sam.utils.spx_price import get_spx_price
 from src.stream.quote_cache import quotes
 from src.stream.trade_feed import TRADE_Q
 
@@ -32,15 +33,10 @@ class GammaToolSam:
         """Initialize the system"""
         print("🚀 Initializing Gamma Tool Sam...")
         
-        # Get initial SPX price from quotes
-        spx_quote = quotes.get(SPX_QUOTE_KEY)
-        if spx_quote:
-            spx_price = (spx_quote[0] + spx_quote[1]) / 2  # Mid price
-            print(f"✅ SPX Price: ${spx_price:,.2f}")
-        else:
-            # Fallback price if quotes not available yet
-            spx_price = 5900.0
-            print(f"⚠️  Using fallback SPX price: ${spx_price:,.2f}")
+        # Get initial SPX price from Polygon
+        print("📡 Fetching SPX price from Polygon...")
+        spx_price = get_spx_price()
+        print(f"✅ SPX Price: ${spx_price:,.2f}")
             
         # Initialize engine
         self.engine = GammaEngine(spx_price=spx_price)
@@ -56,11 +52,7 @@ class GammaToolSam:
                 # Get trade from queue with timeout
                 trade_data = await asyncio.wait_for(TRADE_Q.get(), timeout=1.0)
                 
-                # Update SPX price if available
-                spx_quote = quotes.get(SPX_QUOTE_KEY)
-                if spx_quote:
-                    spx_price = (spx_quote[0] + spx_quote[1]) / 2
-                    self.engine.gamma_calculator.update_spx_price(spx_price)
+                # SPX price updates automatically in the engine
                 
                 # Process the trade
                 processed = self.engine.trade_processor.process_trade(trade_data)

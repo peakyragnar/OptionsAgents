@@ -8,13 +8,24 @@ import numpy as np
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 import pandas as pd
+from dataclasses import dataclass
 
 from gamma_tool_sam.core.gamma_calculator import GammaCalculator
-from gamma_tool_sam.core.trade_processor import TradeProcessor
+from gamma_tool_sam.core.trade_processor import TradeProcessor, OptionTrade
 from gamma_tool_sam.core.position_tracker import PositionTracker
 from gamma_tool_sam.core.change_detector import ChangeDetector, Change
 from gamma_tool_sam.core.confidence_calculator import ConfidenceCalculator, MarketConditions
 from gamma_tool_sam.gamma_engine import GammaEngine
+
+
+@dataclass
+class MockGammaResult:
+    """Mock gamma result for testing"""
+    strike: int
+    option_type: str
+    total_gamma: float
+    directional_force: str
+    gamma_per_contract: float = 0.0001
 
 
 class TestGammaCalculator:
@@ -36,15 +47,19 @@ class TestGammaCalculator:
             (5850, 'PUT', (0.00001, 0.0001)),   # OTM put
         ]
         
-        trade = {
-            'symbol': 'SPXW250130C05900000',
-            'size': 100,
-            'price': 10.50,
-            'timestamp': datetime.now()
-        }
+        date_str = datetime.now().strftime('%y%m%d')
         
         for strike, opt_type, gamma_range in test_cases:
-            trade['symbol'] = f'SPXW250130{opt_type[0]}0{strike}000'
+            trade = OptionTrade(
+                symbol=f'SPXW{date_str}{opt_type[0]}0{strike}000',
+                strike=strike,
+                option_type=opt_type,
+                size=100,
+                price=10.50,
+                timestamp=datetime.now(),
+                conditions=[],
+                exchange=''
+            )
             result = calculator.calculate_trade_gamma(trade)
             
             assert result is not None
@@ -70,27 +85,30 @@ class TestGammaCalculator:
     
     def test_total_gamma_calculation(self, calculator):
         """Test that total gamma is calculated correctly"""
-        trade = {
-            'symbol': 'SPXW250130C05900000',
-            'size': 250,  # 250 contracts
-            'price': 10.50,
-            'timestamp': datetime.now()
-        }
+        date_str = datetime.now().strftime('%y%m%d')
+        trade = OptionTrade(
+            symbol=f'SPXW{date_str}C05900000',
+            strike=5900,
+            option_type='CALL',
+            size=250,  # 250 contracts
+            price=10.50,
+            timestamp=datetime.now(),
+            conditions=[],
+            exchange=''
+        )
         
         result = calculator.calculate_trade_gamma(trade)
         assert result['total_gamma'] == result['gamma_per_contract'] * 250 * 100  # size * 100 multiplier
     
     def test_invalid_option_parsing(self, calculator):
         """Test handling of invalid option symbols"""
-        invalid_trades = [
-            {'symbol': 'INVALID', 'size': 100, 'price': 10},
-            {'symbol': 'SPX', 'size': 100, 'price': 10},
-            {'symbol': 'SPXW250130X05900000', 'size': 100, 'price': 10},  # Invalid type
-        ]
+        # For invalid symbols, we test the parse_option_symbol method directly
+        processor = TradeProcessor()
+        invalid_symbols = ['INVALID', 'SPX', 'SPXW250130X05900000']
         
-        for trade in invalid_trades:
-            result = calculator.calculate_trade_gamma(trade)
-            assert result is None
+        for symbol in invalid_symbols:
+            parsed = processor.parse_option_symbol(symbol)
+            assert parsed is None
 
 
 class TestPositionTracker:
@@ -102,16 +120,17 @@ class TestPositionTracker:
     
     def test_position_accumulation(self, tracker):
         """Test that positions accumulate correctly"""
+        date_str = datetime.now().strftime('%y%m%d')
         trades = [
-            {'symbol': 'SPXW250130C05900000', 'size': 100, 'price': 10},
-            {'symbol': 'SPXW250130C05900000', 'size': 150, 'price': 11},
-            {'symbol': 'SPXW250130P05850000', 'size': 200, 'price': 8},
+            OptionTrade(f'SPXW{date_str}C05900000', 5900, 'CALL', 100, 10, datetime.now(), [], ''),
+            OptionTrade(f'SPXW{date_str}C05900000', 5900, 'CALL', 150, 11, datetime.now(), [], ''),
+            OptionTrade(f'SPXW{date_str}P05850000', 5850, 'PUT', 200, 8, datetime.now(), [], ''),
         ]
         
         gamma_results = [
-            {'strike': 5900, 'option_type': 'CALL', 'total_gamma': 50000, 'directional_force': 'UPWARD'},
-            {'strike': 5900, 'option_type': 'CALL', 'total_gamma': 75000, 'directional_force': 'UPWARD'},
-            {'strike': 5850, 'option_type': 'PUT', 'total_gamma': -80000, 'directional_force': 'DOWNWARD'},
+            MockGammaResult(5900, 'CALL', 50000, 'UPWARD'),
+            MockGammaResult(5900, 'CALL', 75000, 'UPWARD'),
+            MockGammaResult(5850, 'PUT', -80000, 'DOWNWARD'),
         ]
         
         for trade, gamma in zip(trades, gamma_results):
@@ -131,20 +150,29 @@ class TestPositionTracker:
         """Test identification of top pins by gamma force"""
         # Add multiple positions
         positions = [
-            {'strike': 5900, 'gamma': 500000, 'force': 'UPWARD'},
-            {'strike': 5850, 'gamma': -300000, 'force': 'DOWNWARD'},
-            {'strike': 5950, 'gamma': 200000, 'force': 'UPWARD'},
-            {'strike': 5875, 'gamma': -150000, 'force': 'DOWNWARD'},
+            {'strike': 5900, 'gamma': 500000, 'force': 'UPWARD', 'type': 'CALL'},
+            {'strike': 5850, 'gamma': -300000, 'force': 'DOWNWARD', 'type': 'PUT'},
+            {'strike': 5950, 'gamma': 200000, 'force': 'UPWARD', 'type': 'CALL'},
+            {'strike': 5875, 'gamma': -150000, 'force': 'DOWNWARD', 'type': 'PUT'},
         ]
         
         for pos in positions:
-            trade = {'symbol': f'SPXW250130C0{pos["strike"]}000', 'size': 100, 'price': 10}
-            gamma_result = {
-                'strike': pos['strike'],
-                'option_type': 'CALL',
-                'total_gamma': pos['gamma'],
-                'directional_force': pos['force']
-            }
+            trade = OptionTrade(
+                symbol=f'SPXW250130{pos["type"][0]}0{pos["strike"]}000',
+                strike=pos['strike'],
+                option_type=pos['type'],
+                size=100,
+                price=10,
+                timestamp=datetime.now(),
+                conditions=[],
+                exchange=''
+            )
+            gamma_result = MockGammaResult(
+                strike=pos['strike'],
+                option_type=pos['type'],
+                total_gamma=pos['gamma'],
+                directional_force=pos['force']
+            )
             tracker.update_position(trade, gamma_result)
         
         # Get top pins
@@ -168,13 +196,13 @@ class TestChangeDetector:
         """Test volume spike detection"""
         # Normal trades
         for i in range(10):
-            trade = {'symbol': 'SPXW250130C05900000', 'size': 10, 'price': 10}
-            gamma = {'strike': 5900, 'total_gamma': 1000}
+            trade = OptionTrade('SPXW250130C05900000', 5900, 'CALL', 10, 10, datetime.now(), [], '')
+            gamma = MockGammaResult(5900, 'CALL', 1000, 'UPWARD')
             detector.update(trade, gamma, Mock())
         
         # Spike trade (10x normal)
-        spike_trade = {'symbol': 'SPXW250130C05900000', 'size': 100, 'price': 10}
-        spike_gamma = {'strike': 5900, 'total_gamma': 10000, 'option_type': 'CALL'}
+        spike_trade = OptionTrade('SPXW250130C05900000', 5900, 'CALL', 100, 10, datetime.now(), [], '')
+        spike_gamma = MockGammaResult(5900, 'CALL', 10000, 'UPWARD')
         
         changes = detector.update(spike_trade, spike_gamma, Mock())
         
@@ -188,8 +216,8 @@ class TestChangeDetector:
         # Rapid accumulation at a strike
         strike = 5925
         for i in range(5):
-            trade = {'symbol': f'SPXW250130C0{strike}000', 'size': 50 * (i + 1), 'price': 10}
-            gamma = {'strike': strike, 'total_gamma': 5000 * (i + 1)}
+            trade = OptionTrade(f'SPXW250130C0{strike}000', strike, 'CALL', 50 * (i + 1), 10, datetime.now(), [], '')
+            gamma = MockGammaResult(strike, 'CALL', 5000 * (i + 1), 'UPWARD')
             changes = detector.update(trade, gamma, Mock())
         
         # Should detect new pin formation
@@ -200,14 +228,14 @@ class TestChangeDetector:
         """Test detection of directional flips"""
         # Build upward force
         for i in range(5):
-            trade = {'symbol': 'SPXW250130C05950000', 'size': 100, 'price': 10}
-            gamma = {'strike': 5950, 'total_gamma': 50000, 'directional_force': 'UPWARD'}
+            trade = OptionTrade('SPXW250130C05950000', 5950, 'CALL', 100, 10, datetime.now(), [], '')
+            gamma = MockGammaResult(5950, 'CALL', 50000, 'UPWARD')
             detector.update(trade, gamma, Mock())
         
         # Strong downward force to flip direction
         for i in range(10):
-            trade = {'symbol': 'SPXW250130P05850000', 'size': 200, 'price': 10}
-            gamma = {'strike': 5850, 'total_gamma': -100000, 'directional_force': 'DOWNWARD'}
+            trade = OptionTrade('SPXW250130P05850000', 5850, 'PUT', 200, 10, datetime.now(), [], '')
+            gamma = MockGammaResult(5850, 'PUT', -100000, 'DOWNWARD')
             changes = detector.update(trade, gamma, Mock())
         
         # Should detect direction flip
@@ -384,11 +412,15 @@ class TestIntegration:
     
     def test_full_trade_processing_pipeline(self, system):
         """Test complete pipeline from trade to signal"""
-        # Simulate incoming trades
+        # Simulate incoming trades with proper format (timestamp in milliseconds)
+        now_ms = int(datetime.now().timestamp() * 1000)
+        today = datetime.now()
+        date_str = today.strftime('%y%m%d')  # YYMMDD format
+        
         trades = [
-            {'symbol': 'SPXW250130C05910000', 'size': 500, 'price': 8.50, 'timestamp': datetime.now()},
-            {'symbol': 'SPXW250130C05910000', 'size': 300, 'price': 8.75, 'timestamp': datetime.now()},
-            {'symbol': 'SPXW250130P05890000', 'size': 200, 'price': 7.25, 'timestamp': datetime.now()},
+            {'symbol': f'O:SPXW{date_str}C05910000', 'size': 500, 'price': 8.50, 'timestamp': now_ms},
+            {'symbol': f'O:SPXW{date_str}C05910000', 'size': 300, 'price': 8.75, 'timestamp': now_ms},
+            {'symbol': f'O:SPXW{date_str}P05890000', 'size': 200, 'price': 7.25, 'timestamp': now_ms},
         ]
         
         # Process trades
@@ -446,7 +478,7 @@ class TestDataValidation:
         calc.update_spx_price(5900)
         
         # Extreme strikes should still calculate
-        trade = {'symbol': 'SPXW250130C08000000', 'size': 100, 'price': 0.05}
+        trade = OptionTrade('SPXW250130C08000000', 8000, 'CALL', 100, 0.05, datetime.now(), [], '')
         result = calc.calculate_trade_gamma(trade)
         assert result is not None
         assert result['gamma_per_contract'] > 0  # Should be very small but positive
@@ -457,7 +489,7 @@ class TestDataValidation:
         calc.update_spx_price(5900)
         
         # Negative price should be handled
-        trade = {'symbol': 'SPXW250130C05900000', 'size': 100, 'price': -10}
+        trade = OptionTrade('SPXW250130C05900000', 5900, 'CALL', 100, -10, datetime.now(), [], '')
         result = calc.calculate_trade_gamma(trade)
         # Implementation should handle this appropriately
     
@@ -466,7 +498,7 @@ class TestDataValidation:
         calc = GammaCalculator()
         # Don't set SPX price
         
-        trade = {'symbol': 'SPXW250130C05900000', 'size': 100, 'price': 10}
+        trade = OptionTrade('SPXW250130C05900000', 5900, 'CALL', 100, 10, datetime.now(), [], '')
         result = calc.calculate_trade_gamma(trade)
         assert result is None  # Should return None without SPX price
 

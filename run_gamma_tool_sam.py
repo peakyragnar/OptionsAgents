@@ -18,6 +18,7 @@ from src.dealer.engine import _book
 
 # Import Gamma Tool Sam
 from gamma_tool_sam.gamma_engine import GammaEngine
+from gamma_tool_sam.utils.spx_price import get_spx_price, update_spx_price_loop
 
 # Configuration
 DASHBOARD_UPDATE_INTERVAL = 3  # seconds
@@ -31,32 +32,9 @@ class GammaToolSamRunner:
         self.running = False
         self.spx_price = None
         
-    def get_spx_price(self) -> Optional[float]:
-        """Get current SPX price from various sources"""
-        # Try quote cache first
-        spx_quote = quotes.get('I:SPX')
-        if spx_quote and spx_quote[0] > 0 and spx_quote[1] > 0:
-            return (spx_quote[0] + spx_quote[1]) / 2
-            
-        # Try getting from recent snapshot
-        try:
-            import duckdb
-            conn = duckdb.connect(':memory:')
-            result = conn.execute("""
-                SELECT MAX(under_px) 
-                FROM read_parquet('data/parquet/spx/date=*/**.parquet')
-                WHERE date = CURRENT_DATE
-                AND under_px IS NOT NULL
-            """).fetchone()
-            conn.close()
-            
-            if result and result[0]:
-                return float(result[0])
-        except:
-            pass
-            
-        # Fallback
-        return 5900.0
+    def get_spx_price(self) -> float:
+        """Get current SPX price from Polygon"""
+        return get_spx_price()
         
     async def initialize(self):
         """Initialize Gamma Tool Sam"""
@@ -85,12 +63,12 @@ class GammaToolSamRunner:
                     self.engine.trade_processor.process_trade(trade)
                     processed_count += 1
                     
-                    # Update SPX price periodically
-                    if processed_count % 50 == 0:
-                        new_price = self.get_spx_price()
-                        if new_price != self.spx_price:
-                            self.spx_price = new_price
-                            self.engine.gamma_calculator.update_spx_price(new_price)
+                    # SPX price now updates automatically via update_spx_price_loop
+                    if processed_count % 100 == 0:
+                        logger_msg = f"Processed {processed_count} trades"
+                        if hasattr(self.engine.gamma_calculator, 'spx_price'):
+                            logger_msg += f" | SPX: ${self.engine.gamma_calculator.spx_price:,.2f}"
+                        print(f"📊 {logger_msg}")
                             
             except asyncio.TimeoutError:
                 continue
@@ -135,8 +113,14 @@ class GammaToolSamRunner:
             dashboard_thread.daemon = True
             dashboard_thread.start()
             
+            # Start SPX price updater
+            spx_task = asyncio.create_task(update_spx_price_loop(self.engine, interval=10))
+            
             # Process trades
-            await self.process_trades()
+            await asyncio.gather(
+                self.process_trades(),
+                spx_task
+            )
             
         except KeyboardInterrupt:
             print("\n⚠️  Shutting down Gamma Tool Sam...")

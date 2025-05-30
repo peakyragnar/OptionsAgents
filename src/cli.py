@@ -157,10 +157,15 @@ def load_symbols_from_snapshot():
         return [], None
 
 @app.command()
-def live(dashboard: bool = typer.Option(False, "--dashboard", "-d", help="Enable dashboard mode")):
+def live(
+    dashboard: bool = typer.Option(False, "--dashboard", "-d", help="Enable dashboard mode"),
+    gamma_tool_sam: bool = typer.Option(False, "--gamma-tool-sam", "-g", help="Enable Gamma Tool Sam integration")
+):
     """
     Run quote cache, trade feed, and dealer-gamma engine in real time.
     Snapshots are written to DuckDB every second.
+    
+    Use --gamma-tool-sam to also run Gamma Tool Sam for directional analysis.
     """
     import os
     import time
@@ -298,6 +303,39 @@ def live(dashboard: bool = typer.Option(False, "--dashboard", "-d", help="Enable
                     asyncio.create_task(run_with_error_handling(trades_run(symbols), "Trade Feed")),
                     asyncio.create_task(run_with_error_handling(engine_run(append_gamma), "Dealer Engine"))
                 ]
+                
+                # Add Gamma Tool Sam if requested
+                if gamma_tool_sam:
+                    try:
+                        from gamma_tool_sam.integration import run_gamma_tool_sam
+                        from gamma_tool_sam.utils.spx_price import update_spx_price_loop
+                        
+                        # Create gamma engine with initial SPX price
+                        from gamma_tool_sam.gamma_engine import GammaEngine
+                        gamma_engine = GammaEngine(spx_price=real_spx_price or 5920.0)
+                        
+                        # Add SPX price updater
+                        tasks.append(
+                            asyncio.create_task(run_with_error_handling(
+                                update_spx_price_loop(gamma_engine, interval=10),
+                                "SPX Price Updater"
+                            ))
+                        )
+                        
+                        # Add Gamma Tool Sam processor
+                        tasks.append(
+                            asyncio.create_task(run_with_error_handling(
+                                run_gamma_tool_sam(gamma_engine, TRADE_Q),
+                                "Gamma Tool Sam"
+                            ))
+                        )
+                        
+                        print("✅ Gamma Tool Sam integration enabled")
+                        print("   Dashboard available at: http://localhost:8080")
+                        
+                    except ImportError as e:
+                        logger.error(f"Failed to import Gamma Tool Sam: {e}")
+                        print("❌ Gamma Tool Sam not available - continuing without it")
             
                 # Wait for shutdown signal
                 while not killer.kill_now:

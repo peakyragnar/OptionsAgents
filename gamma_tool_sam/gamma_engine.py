@@ -29,6 +29,10 @@ class GammaEngine:
         self.change_detector = ChangeDetector()
         self.confidence_calculator = ConfidenceCalculator()
         
+        # SPX price tracking
+        self._last_spx_update = None
+        self._spx_update_interval = 10  # Update SPX every 10 seconds max
+        
         # Set initial SPX price if provided
         if spx_price:
             self.gamma_calculator.update_spx_price(spx_price)
@@ -42,6 +46,9 @@ class GammaEngine:
         
     def _process_trade(self, trade):
         """Process each incoming trade through the pipeline"""
+        # Update SPX price periodically from quotes
+        self._update_spx_price_if_needed()
+        
         # Calculate gamma
         gamma_result = self.gamma_calculator.calculate_trade_gamma(trade)
         if not gamma_result:
@@ -57,6 +64,33 @@ class GammaEngine:
         
         # Update analysis
         self._update_analysis()
+        
+    def _update_spx_price_if_needed(self):
+        """Update SPX price from quote cache if needed"""
+        now = datetime.now()
+        
+        # Check if we need to update
+        if (self._last_spx_update is None or 
+            (now - self._last_spx_update).total_seconds() > self._spx_update_interval):
+            
+            # Try to get from quote cache
+            try:
+                from src.stream.quote_cache import quotes
+                
+                # Try I:SPX (index quote)
+                spx_quote = quotes.get('I:SPX')
+                if spx_quote and spx_quote.get('bid') and spx_quote.get('ask'):
+                    bid = spx_quote['bid']
+                    ask = spx_quote['ask']
+                    if bid > 0 and ask > 0:
+                        new_price = (bid + ask) / 2
+                        self.gamma_calculator.update_spx_price(new_price)
+                        self._last_spx_update = now
+                        return
+                        
+            except Exception as e:
+                # Quote cache not available, continue with last known price
+                pass
         
     def _update_analysis(self):
         """Update current analysis state"""
@@ -423,6 +457,11 @@ class GammaEngine:
             'market_conditions': details.get('market_conditions', {}),
             'adjustments': details.get('adjustments', {})
         }
+        
+    def update_spx_price(self, price: float):
+        """Manually update SPX price"""
+        self.gamma_calculator.update_spx_price(price)
+        self._last_spx_update = datetime.now()
         
     def _get_dynamic_threshold(self) -> float:
         """Get dynamic gamma threshold based on time of day"""

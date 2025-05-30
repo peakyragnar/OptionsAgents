@@ -22,6 +22,13 @@ The system consists of several key components:
 
 ## Recent Updates
 
+**🎯 Gamma Tool Sam Integration (2025-05-30)**
+- Added integrated mode for Gamma Tool Sam (`--gamma-tool-sam` flag)
+- Fixed process isolation issues with proper asyncio queue sharing
+- Implemented dynamic gamma thresholds throughout trading day
+- Added premium selling strategies for low gamma environments
+- Web dashboard with real-time directional analysis
+
 **✅ Snapshot System Fixed (2025-05-28)**
 - Fixed critical issue with expired options data
 - Added reliable 0DTE options capture with proper date handling
@@ -52,6 +59,7 @@ The system consists of several key components:
 
 The system provides a Typer-based CLI:
 
+### Basic Mode
 ```bash
 python -m src.cli live
 ```
@@ -61,6 +69,17 @@ This launches the complete system:
 - Trade feed for streaming trades from Polygon
 - Dealer engine for processing trades and calculating gamma
 - Automatic snapshots saved to DuckDB
+
+### With Gamma Tool Sam Integration
+```bash
+python -m src.cli live --gamma-tool-sam
+```
+
+This adds:
+- Real-time directional analysis dashboard at http://localhost:8080
+- Dynamic gamma thresholds (25K morning → 400K EOD)
+- Pin detection and premium selling signals
+- Directional force visualization
 
 ### System Monitoring
 
