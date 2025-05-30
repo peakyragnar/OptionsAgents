@@ -16,6 +16,11 @@ __pycache__/
 data/
 *.log
 
+# Database files
+*.duckdb
+*.duckdb.wal
+gamma_tool_sam.duckdb*
+
 
 
 
