@@ -36,6 +36,13 @@ GAMMA_TESTS = [
     "tests/test_dealer_gamma_values.py",
 ]
 
+# Gamma Tool Sam tests
+GAMMA_TOOL_SAM_TESTS = [
+    "tests/test_gamma_tool_sam.py",
+    "tests/test_gamma_calculations.py",
+    "tests/test_premium_strategies.py",
+]
+
 # Data quality tests
 DATA_TESTS = [
     "tests/test_data_quality.py",
@@ -68,6 +75,9 @@ def main():
     
     # Run gamma tests  
     exit_code |= run_tests(GAMMA_TESTS, "Running Dealer Gamma Tests")
+    
+    # Run Gamma Tool Sam tests
+    exit_code |= run_tests(GAMMA_TOOL_SAM_TESTS, "Running Gamma Tool Sam Tests")
     
     # Run data quality tests
     exit_code |= run_tests(DATA_TESTS, "Running Data Quality Tests")

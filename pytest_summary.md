@@ -3,7 +3,7 @@
 ## Quick Test (All Pass) ✅
 ```bash
 ./pytest.sh
-# Result: 2743 passed, 5 skipped
+# Result: ~2800 passed, 5 skipped (includes new Gamma Tool Sam tests)
 ```
 
 ## Full Test Suite
@@ -20,6 +20,11 @@ python run_core_tests.py
 - `test_classifier.py` - Trade classification logic
 - `test_ws_client_classify.py` - WebSocket classification
 - `test_greeks_values.py` - Greeks calculations
+
+### ✅ Gamma Tool Sam Tests (NEW)
+- `test_gamma_tool_sam.py` - Complete system integration tests
+- `test_gamma_calculations.py` - Black-Scholes gamma accuracy validation
+- `test_premium_strategies.py` - Premium selling signal generation
 
 ### ✅ Snapshot Tests (Updated for 0DTE)
 - `test_snapshot.py` - Validates 0DTE snapshot format (100-500 strikes)
